@@ -251,7 +251,7 @@ def _track_request_start() -> None:
 def _track_request_end(response: Response) -> Response:
     start = request.environ.get("lottery_checker.request_start")
     duration_ms = int((perf_counter() - start) * 1000) if isinstance(start, float) else 0
-    traffic_tracker.record(
+    record = traffic_tracker.record(
         method=request.method,
         path=request.path,
         status_code=response.status_code,
@@ -260,6 +260,19 @@ def _track_request_end(response: Response) -> Response:
         accept=request.headers.get("Accept", ""),
         user_agent=request.headers.get("User-Agent", ""),
     )
+    if record and search_store and search_store.enabled:
+        try:
+            search_store.save_traffic_event(
+                method=record.method,
+                path=record.path,
+                status_code=record.status_code,
+                ip=record.ip,
+                duration_ms=record.duration_ms,
+                epoch_seconds=record.epoch_seconds,
+            )
+        except Exception:
+            # Traffic persistence should never break responses.
+            pass
     return response
 
 
@@ -463,6 +476,20 @@ def admin() -> Response | str:
         return auth_failed
 
     traffic = traffic_tracker.snapshot(top_paths=15, recent_limit=80)
+    traffic_lookback_raw = os.environ.get("TRAFFIC_LOOKBACK_MINUTES", "").strip()
+    try:
+        traffic_lookback_minutes = int(traffic_lookback_raw) if traffic_lookback_raw else 1440
+    except ValueError:
+        traffic_lookback_minutes = 1440
+
+    if search_store and search_store.enabled:
+        traffic = search_store.build_traffic_snapshot(
+            top_paths=15,
+            recent_limit=80,
+            series_minutes=30,
+            lookback_minutes=max(30, traffic_lookback_minutes),
+        )
+
     recent_searches = search_store.list_recent_searches(limit=100) if search_store else []
     search_store_enabled = bool(search_store and search_store.enabled)
     dynamo_status_detail = ""

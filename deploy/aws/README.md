@@ -97,6 +97,61 @@ cd deploy\aws
 .\create-dynamodb-search-history.ps1
 ```
 
+## Utility Script: Attach EC2 Role for DynamoDB
+
+If admin page shows `NoCredentialsError: Unable to locate credentials`, attach an IAM role to EC2:
+- grants DynamoDB access to the app table
+- creates/uses instance profile
+- associates profile to target EC2
+- auto-grants missing EC2 association permissions to current IAM user (if possible)
+- sets IMDS options (`http-tokens required`, `hop-limit 2`) for Dockerized app credential access
+
+Find target instance ID:
+
+```bash
+aws ec2 describe-instances --region ap-northeast-1 --query "Reservations[].Instances[].[InstanceId,PublicIpAddress,State.Name,Tags]" --output table
+```
+
+### Linux / macOS
+
+```bash
+cd deploy/aws
+chmod +x attach-ec2-dynamodb-role.sh
+./attach-ec2-dynamodb-role.sh --instance-id i-xxxxxxxxxxxxxxxxx --region ap-northeast-1 --table-name lottery-checker-search-history
+```
+
+### Windows (PowerShell)
+
+```powershell
+cd deploy\aws
+.\attach-ec2-dynamodb-role.ps1 -InstanceId i-xxxxxxxxxxxxxxxxx -AwsRegion ap-northeast-1 -TableName lottery-checker-search-history
+```
+
+Optional:
+- PowerShell: `-CallerPolicyName`, `-SkipCallerPermissionGrant`, `-SkipMetadataOptions`
+- Bash: `--caller-policy-name`, `--skip-caller-permission-grant`, `--skip-metadata-options`
+
+After script finishes, restart app on EC2:
+
+```bash
+cd ~/lottery-checker
+bash deploy/ec2/update.sh
+```
+
+Minimum IAM actions required by this utility:
+- `iam:GetRole`
+- `iam:CreateRole`
+- `iam:PutRolePolicy`
+- `iam:GetInstanceProfile`
+- `iam:CreateInstanceProfile`
+- `iam:AddRoleToInstanceProfile`
+- `iam:PutUserPolicy` (only if using auto-grant for current caller)
+- `ec2:DescribeIamInstanceProfileAssociations`
+- `ec2:AssociateIamInstanceProfile`
+- `ec2:ReplaceIamInstanceProfileAssociation`
+- `ec2:ModifyInstanceMetadataOptions`
+- `sts:GetCallerIdentity`
+
 ## Deployment Output
 
 After deploy, scripts create:

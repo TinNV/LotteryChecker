@@ -230,6 +230,7 @@ ngrok will print a public HTTPS URL in terminal.
 This app now has:
 - `/admin`: traffic dashboard (protected by Basic Auth)
 - DynamoDB persistence for search history with TTL cleanup
+- DynamoDB persistence for traffic graph data (shared table, separate partition key)
 - Traffic counter ignores static assets and refresh duplicates (same IP + page path in short window)
 - Traffic counter also ignores `/admin` and `/health` requests to reduce self-noise
 
@@ -288,6 +289,30 @@ Attach an instance role policy that allows:
 on resource:
 - `arn:aws:dynamodb:ap-northeast-1:<ACCOUNT_ID>:table/lottery-checker-search-history`
 
+Auto-setup script (recommended):
+
+Linux / macOS:
+
+```bash
+cd deploy/aws
+chmod +x attach-ec2-dynamodb-role.sh
+./attach-ec2-dynamodb-role.sh --instance-id i-xxxxxxxxxxxxxxxxx --region ap-northeast-1 --table-name lottery-checker-search-history
+```
+
+Windows PowerShell:
+
+```powershell
+cd deploy\aws
+.\attach-ec2-dynamodb-role.ps1 -InstanceId i-xxxxxxxxxxxxxxxxx -AwsRegion ap-northeast-1 -TableName lottery-checker-search-history
+```
+
+Then restart app on EC2:
+
+```bash
+cd ~/lottery-checker
+bash deploy/ec2/update.sh
+```
+
 ### 10.3 Configure env and deploy
 
 Configure `.env` (recommended):
@@ -300,6 +325,8 @@ cp -n .env.example .env
 # AWS_REGION=ap-northeast-1
 # DYNAMODB_SEARCH_TABLE=lottery-checker-search-history
 # SEARCH_HISTORY_TTL_DAYS=30
+# TRAFFIC_HISTORY_TTL_DAYS=30
+# TRAFFIC_LOOKBACK_MINUTES=1440
 # ADMIN_USER=admin
 # ADMIN_PASSWORD=<strong_password>
 ./deploy/ec2/deploy.sh

@@ -111,11 +111,11 @@ class TrafficTracker:
         duration_ms: int,
         accept: str = "",
         user_agent: str = "",
-    ) -> None:
+    ) -> RequestRecord | None:
         with self._lock:
             now_epoch = self._now_fn()
             if self._is_static_path(path) or self._is_excluded_path(path):
-                return
+                return None
             if self._is_refresh_duplicate(
                 method=method,
                 path=path,
@@ -124,23 +124,23 @@ class TrafficTracker:
                 accept=accept,
                 now_epoch=now_epoch,
             ):
-                return
+                return None
 
             self._prune_navigation_cache(now_epoch)
             self._total_requests += 1
             self._path_counter[path] += 1
             self._status_counter[status_code] += 1
-            self._recent_requests.appendleft(
-                RequestRecord(
-                    timestamp=utc_now().isoformat(),
-                    epoch_seconds=int(now_epoch),
-                    method=method,
-                    path=path,
-                    status_code=status_code,
-                    ip=ip,
-                    duration_ms=duration_ms,
-                )
+            request_record = RequestRecord(
+                timestamp=utc_now().isoformat(),
+                epoch_seconds=int(now_epoch),
+                method=method,
+                path=path,
+                status_code=status_code,
+                ip=ip,
+                duration_ms=duration_ms,
             )
+            self._recent_requests.appendleft(request_record)
+            return request_record
 
     def snapshot(self, top_paths: int = 10, recent_limit: int = 50, series_minutes: int = 30) -> Dict[str, Any]:
         with self._lock:
@@ -167,12 +167,20 @@ class TrafficTracker:
 
 class DynamoSearchHistoryStore:
     SEARCH_PARTITION = "SEARCH"
+    TRAFFIC_PARTITION = "TRAFFIC"
 
-    def __init__(self, table_name: str, region_name: str, ttl_days: int = 30) -> None:
+    def __init__(
+        self,
+        table_name: str,
+        region_name: str,
+        ttl_days: int = 30,
+        traffic_ttl_days: int | None = None,
+    ) -> None:
         if boto3 is None:
             raise RuntimeError("boto3 is required for DynamoDB integration")
         self.table_name = table_name
         self.ttl_days = ttl_days
+        self.traffic_ttl_days = max(1, int(traffic_ttl_days or ttl_days))
         self._dynamodb = boto3.resource("dynamodb", region_name=region_name)
         self._table = self._dynamodb.Table(table_name)
         self._enabled = True
@@ -185,6 +193,11 @@ class DynamoSearchHistoryStore:
     @property
     def last_error(self) -> str:
         return self._last_error
+
+    def _disable(self, exc: Exception, context: str) -> None:
+        self._enabled = False
+        self._last_error = f"{type(exc).__name__}: {exc}"
+        LOGGER.warning("DynamoDB %s disabled: %s", context, self._last_error)
 
     def save_search(
         self,
@@ -225,9 +238,7 @@ class DynamoSearchHistoryStore:
         try:
             self._table.put_item(Item=item)
         except (ClientError, BotoCoreError) as exc:
-            self._enabled = False
-            self._last_error = f"{type(exc).__name__}: {exc}"
-            LOGGER.warning("DynamoDB search history disabled: %s", self._last_error)
+            self._disable(exc, "search history")
 
     def list_recent_searches(self, limit: int = 100) -> List[Dict[str, Any]]:
         if not self._enabled:
@@ -239,13 +250,166 @@ class DynamoSearchHistoryStore:
                 Limit=max(1, min(limit, 200)),
             )
         except (ClientError, BotoCoreError) as exc:
-            self._enabled = False
-            self._last_error = f"{type(exc).__name__}: {exc}"
-            LOGGER.warning("DynamoDB search history disabled: %s", self._last_error)
+            self._disable(exc, "search history")
             return []
 
         items = response.get("Items", [])
         return items if isinstance(items, list) else []
+
+    @staticmethod
+    def _item_int(item: Dict[str, Any], key: str, default: int = 0) -> int:
+        try:
+            return int(item.get(key, default))
+        except Exception:
+            return default
+
+    @staticmethod
+    def _item_str(item: Dict[str, Any], key: str, default: str = "") -> str:
+        value = item.get(key, default)
+        return str(value) if value is not None else default
+
+    def save_traffic_event(
+        self,
+        *,
+        method: str,
+        path: str,
+        status_code: int,
+        ip: str,
+        duration_ms: int,
+        epoch_seconds: int | None = None,
+    ) -> None:
+        if not self._enabled:
+            return
+
+        created_epoch = int(epoch_seconds) if epoch_seconds is not None else int(time())
+        ttl_epoch = created_epoch + self.traffic_ttl_days * 24 * 60 * 60
+        created_iso = datetime.fromtimestamp(created_epoch, tz=timezone.utc).isoformat()
+        epoch_millis = int(created_epoch * 1000)
+
+        item = {
+            "pk": self.TRAFFIC_PARTITION,
+            "sk": f"{epoch_millis:013d}#{uuid.uuid4().hex[:10]}",
+            "created_at": created_epoch,
+            "created_at_iso": created_iso,
+            "ttl_epoch": ttl_epoch,
+            "method": method[:10],
+            "path": path[:256],
+            "status_code": int(status_code),
+            "client_ip": ip[:64],
+            "duration_ms": max(0, int(duration_ms)),
+        }
+
+        try:
+            self._table.put_item(Item=item)
+        except (ClientError, BotoCoreError) as exc:
+            self._disable(exc, "traffic history")
+
+    def _list_recent_traffic_events(self, limit: int, lookback_minutes: int) -> List[Dict[str, Any]]:
+        if not self._enabled:
+            return []
+
+        threshold_epoch = int(time()) - max(1, lookback_minutes) * 60
+        items: List[Dict[str, Any]] = []
+        exclusive_start_key = None
+        remaining = max(1, min(limit, 2000))
+
+        while remaining > 0:
+            query_kwargs: Dict[str, Any] = {
+                "KeyConditionExpression": Key("pk").eq(self.TRAFFIC_PARTITION),
+                "ScanIndexForward": False,
+                "Limit": min(200, remaining),
+            }
+            if exclusive_start_key:
+                query_kwargs["ExclusiveStartKey"] = exclusive_start_key
+
+            try:
+                response = self._table.query(**query_kwargs)
+            except (ClientError, BotoCoreError) as exc:
+                self._disable(exc, "traffic history")
+                return []
+
+            page_items = response.get("Items", [])
+            if not isinstance(page_items, list) or not page_items:
+                break
+
+            reached_old_item = False
+            for item in page_items:
+                created_at = self._item_int(item, "created_at", 0)
+                if created_at < threshold_epoch:
+                    reached_old_item = True
+                    break
+                items.append(item)
+                remaining -= 1
+                if remaining <= 0:
+                    break
+
+            if reached_old_item or remaining <= 0:
+                break
+
+            exclusive_start_key = response.get("LastEvaluatedKey")
+            if not exclusive_start_key:
+                break
+
+        return items
+
+    def build_traffic_snapshot(
+        self,
+        *,
+        top_paths: int = 10,
+        recent_limit: int = 50,
+        series_minutes: int = 30,
+        lookback_minutes: int = 1440,
+    ) -> Dict[str, Any]:
+        now_epoch = int(time())
+        items = self._list_recent_traffic_events(limit=2000, lookback_minutes=lookback_minutes)
+
+        path_counter: Counter[str] = Counter()
+        status_counter: Counter[int] = Counter()
+        recent_requests: List[RequestRecord] = []
+        minute_counts: Dict[int, int] = {}
+        series_start_epoch = now_epoch - (max(1, series_minutes) - 1) * 60
+
+        for item in items:
+            created_epoch = self._item_int(item, "created_at", 0)
+            path_value = self._item_str(item, "path", "")
+            status_value = self._item_int(item, "status_code", 0)
+            method_value = self._item_str(item, "method", "GET")
+            ip_value = self._item_str(item, "client_ip", "-")
+            duration_value = self._item_int(item, "duration_ms", 0)
+            created_iso = self._item_str(item, "created_at_iso", "")
+
+            path_counter[path_value] += 1
+            status_counter[status_value] += 1
+            if created_epoch >= series_start_epoch:
+                minute_bucket = (created_epoch // 60) * 60
+                minute_counts[minute_bucket] = minute_counts.get(minute_bucket, 0) + 1
+
+            if len(recent_requests) < max(1, recent_limit):
+                recent_requests.append(
+                    RequestRecord(
+                        timestamp=created_iso,
+                        epoch_seconds=created_epoch,
+                        method=method_value,
+                        path=path_value,
+                        status_code=status_value,
+                        ip=ip_value,
+                        duration_ms=duration_value,
+                    )
+                )
+
+        minute_series = []
+        range_start = ((now_epoch - (max(1, series_minutes) - 1) * 60) // 60) * 60
+        for minute_epoch in range(range_start, now_epoch + 1, 60):
+            minute_label = datetime.fromtimestamp(minute_epoch, tz=timezone.utc).strftime("%H:%M")
+            minute_series.append({"minute": minute_label, "count": minute_counts.get(minute_epoch, 0)})
+
+        return {
+            "total_requests": len(items),
+            "top_paths": path_counter.most_common(top_paths),
+            "status_counts": sorted(status_counter.items(), key=lambda item: item[0]),
+            "recent_requests": recent_requests[:recent_limit],
+            "minute_series": minute_series,
+        }
 
 
 def create_search_store_from_env() -> DynamoSearchHistoryStore | None:
@@ -266,7 +430,18 @@ def create_search_store_from_env() -> DynamoSearchHistoryStore | None:
     except ValueError:
         ttl_days = 30
 
+    traffic_ttl_days_raw = os.environ.get("TRAFFIC_HISTORY_TTL_DAYS", "").strip()
     try:
-        return DynamoSearchHistoryStore(table_name=table_name, region_name=region_name, ttl_days=max(1, ttl_days))
+        traffic_ttl_days = int(traffic_ttl_days_raw) if traffic_ttl_days_raw else ttl_days
+    except ValueError:
+        traffic_ttl_days = ttl_days
+
+    try:
+        return DynamoSearchHistoryStore(
+            table_name=table_name,
+            region_name=region_name,
+            ttl_days=max(1, ttl_days),
+            traffic_ttl_days=max(1, traffic_ttl_days),
+        )
     except Exception:
         return None
