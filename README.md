@@ -57,3 +57,7 @@ pytest
 
 - Dữ liệu lấy trực tiếp từ CSV public của Mizuho, định dạng có thể thay đổi theo thời gian.
 - Logic dò vé truyền thống đã hỗ trợ các điều kiện phổ biến: khớp tổ/số, khớp đuôi, giải trước-sau, giải khác tổ cùng số.
+
+## Deploy AWS
+
+- Simple AWS deploy guide and scripts: `deploy/aws/README.md`

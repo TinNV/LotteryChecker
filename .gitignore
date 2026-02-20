@@ -1,3 +1,5 @@
 .venv/
 __pycache__/
 *.pyc
+deploy/aws/deployment-config.json
+deploy/ec2/CertMindMapApp-Key-unix.pem

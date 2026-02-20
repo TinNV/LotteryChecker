@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+import os
 from typing import Any, Dict, List, Tuple
 
 from flask import Flask, render_template, request
@@ -315,5 +316,16 @@ def index() -> str:
     )
 
 
+@app.get("/health")
+def health() -> tuple[Dict[str, str], int]:
+    return {"status": "ok"}, 200
+
+
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=5000, debug=True)
+    host = os.environ.get("HOST", "127.0.0.1")
+    try:
+        port = int(os.environ.get("PORT", "5000"))
+    except ValueError:
+        port = 5000
+    debug = os.environ.get("FLASK_DEBUG", "").lower() in {"1", "true", "yes", "on"}
+    app.run(host=host, port=port, debug=debug)

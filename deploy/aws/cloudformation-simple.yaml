@@ -1,0 +1,83 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "LotteryChecker simple AWS deployment (App Runner + ECR image)"
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: lottery-checker
+    AllowedPattern: "^[a-z0-9-]+$"
+    Description: Lowercase project name used for resource naming.
+
+  ImageUri:
+    Type: String
+    Description: Full ECR image URI with tag (for example 123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/lottery-checker:v1).
+
+  InstanceCpu:
+    Type: String
+    Default: "1 vCPU"
+    Description: App Runner CPU configuration.
+
+  InstanceMemory:
+    Type: String
+    Default: "2 GB"
+    Description: App Runner memory configuration.
+
+Resources:
+  AppRunnerEcrAccessRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: build.apprunner.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSAppRunnerServicePolicyForECRAccess
+
+  AppRunnerService:
+    Type: AWS::AppRunner::Service
+    Properties:
+      ServiceName: !Sub "${ProjectName}-service"
+      SourceConfiguration:
+        AutoDeploymentsEnabled: false
+        AuthenticationConfiguration:
+          AccessRoleArn: !GetAtt AppRunnerEcrAccessRole.Arn
+        ImageRepository:
+          ImageRepositoryType: ECR
+          ImageIdentifier: !Ref ImageUri
+          ImageConfiguration:
+            Port: "8080"
+            RuntimeEnvironmentVariables:
+              - Name: PYTHONUNBUFFERED
+                Value: "1"
+      InstanceConfiguration:
+        Cpu: !Ref InstanceCpu
+        Memory: !Ref InstanceMemory
+      HealthCheckConfiguration:
+        Protocol: HTTP
+        Path: /health
+        Interval: 10
+        Timeout: 5
+        HealthyThreshold: 1
+        UnhealthyThreshold: 5
+
+Outputs:
+  ServiceUrl:
+    Description: Public HTTPS URL for LotteryChecker.
+    Value: !Sub "https://${AppRunnerService.ServiceUrl}"
+    Export:
+      Name: !Sub "${ProjectName}-service-url"
+
+  ServiceArn:
+    Description: App Runner service ARN.
+    Value: !GetAtt AppRunnerService.ServiceArn
+    Export:
+      Name: !Sub "${ProjectName}-service-arn"
+
+  EcrAccessRoleArn:
+    Description: IAM role used by App Runner to pull image from ECR.
+    Value: !GetAtt AppRunnerEcrAccessRole.Arn
+    Export:
+      Name: !Sub "${ProjectName}-ecr-access-role-arn"
