@@ -1,0 +1,794 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dò vé số Nhật Bản</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <main class="app-shell">
+    <section class="hero">
+      <h1>Dò vé số Nhật Bản</h1>
+      <p>Nhập nhiều vé, đọc từ ảnh hoặc camera, lưu lịch sử trên máy để xem lại nhanh.</p>
+    </section>
+
+    <form method="post" class="panel control-panel" id="checker-form">
+      <div class="toolbar">
+        <label>
+          Loại vé
+          <select name="game" id="game-select">
+            {% for option in game_options %}
+              <option value="{{ option.value }}" {% if selected_game == option.value %}selected{% endif %}>{{ option.label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+
+        <label>
+          Kỳ quay
+          <input type="text" id="draw-number-input" name="draw_number" value="{{ draw_number_input }}" placeholder="Để trống = kỳ mới nhất">
+        </label>
+
+        <div class="action-row">
+          <button type="button" id="add-ticket-btn" class="btn-secondary">Thêm vé</button>
+          <button type="submit" class="btn-primary">Dò kết quả</button>
+        </div>
+      </div>
+
+      <div class="scan-row">
+        <input type="file" id="ticket-image-input" accept="image/*" hidden>
+        <button type="button" id="scan-upload-btn" class="btn-ghost">Đọc vé từ ảnh</button>
+        <button type="button" id="scan-camera-btn" class="btn-ghost">Quét bằng camera</button>
+        <span id="scan-status" class="scan-status"></span>
+      </div>
+
+      <p id="rule-hint" class="hint"></p>
+
+      <section id="number-ticket-section" class="ticket-section">
+        <h3>Danh sách vé Loto</h3>
+        <div id="number-ticket-list" class="ticket-list">
+          {% for ticket in number_ticket_rows %}
+            <div class="ticket-item">
+              <span class="ticket-index">Vé {{ loop.index }}</span>
+              <input type="text" name="tickets[]" value="{{ ticket }}" placeholder="Ví dụ: 1 6 11 26 33 40">
+              <button type="button" class="btn-remove" aria-label="Xóa vé">Xóa</button>
+            </div>
+          {% endfor %}
+        </div>
+      </section>
+
+      <section id="traditional-ticket-section" class="ticket-section">
+        <h3>Danh sách vé truyền thống</h3>
+        <div id="traditional-ticket-list" class="ticket-list">
+          {% for row in traditional_ticket_rows %}
+            <div class="ticket-item traditional">
+              <span class="ticket-index">Vé {{ loop.index }}</span>
+              <input type="text" name="ticket_groups[]" value="{{ row.group }}" placeholder="Số tổ">
+              <input type="text" name="ticket_numbers[]" value="{{ row.number }}" placeholder="Số vé">
+              <button type="button" class="btn-remove" aria-label="Xóa vé">Xóa</button>
+            </div>
+          {% endfor %}
+        </div>
+      </section>
+
+      {% if recent_draw_numbers %}
+        <div class="chips">
+          <span>Kỳ gần đây:</span>
+          {% for draw_no in recent_draw_numbers %}
+            <button type="submit" name="draw_number" value="{{ draw_no }}" class="chip">{{ draw_no }}</button>
+          {% endfor %}
+        </div>
+      {% endif %}
+    </form>
+
+    <section class="panel history-panel">
+      <div class="row">
+        <h3>Lịch sử dò vé gần đây (local)</h3>
+        <button type="button" class="btn-clear-history" id="clear-history-btn">Xóa lịch sử</button>
+      </div>
+      <div id="history-list" class="history-list"></div>
+    </section>
+
+    {% if error %}
+      <section class="alert error"><strong>Lỗi:</strong> {{ error }}</section>
+    {% endif %}
+
+    {% if number_draw_result %}
+      <section class="panel">
+        <div class="row">
+          <h2>{{ number_draw_result.draw_title }}</h2>
+          <span class="meta">{{ number_draw_result.draw_date_jp }}</span>
+        </div>
+        <p class="meta">Địa điểm: {{ number_draw_result.venue }}</p>
+        <div class="nums">
+          <span class="label">Số chính:</span>
+          {% for n in number_draw_result.main_numbers %}
+            <span class="ball">{{ "%02d"|format(n) }}</span>
+          {% endfor %}
+        </div>
+        <div class="nums">
+          <span class="label">Số bonus:</span>
+          {% for n in number_draw_result.bonus_numbers %}
+            <span class="ball bonus">{{ "%02d"|format(n) }}</span>
+          {% endfor %}
+        </div>
+        <div class="meta-grid">
+          <p>Carryover: {{ number_draw_result.carryover }}</p>
+          <p>Doanh số: {{ number_draw_result.sales_amount }}</p>
+          <p>Thời hạn lĩnh thưởng: {{ number_draw_result.payment_period }}</p>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="row">
+          <h3>Kết quả dò vé Loto</h3>
+          <span class="meta">Vé trúng: {{ number_win_count }}</span>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Vé đã nhập</th>
+              <th>Trạng thái</th>
+              <th>Hạng</th>
+              <th>Tiền thưởng</th>
+              <th>Lỗi</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in number_ticket_results %}
+              <tr>
+                <td>{{ row.index }}</td>
+                <td>{{ row.raw }}</td>
+                <td>{% if row.winning %}Trúng{% else %}Không trúng{% endif %}</td>
+                <td>{{ row.rank }}</td>
+                <td>{{ row.payout }}</td>
+                <td>{{ row.error }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </section>
+    {% endif %}
+
+    {% if traditional_draw_result %}
+      <section class="panel">
+        <div class="row">
+          <h2>{{ traditional_draw_result.draw_title }}</h2>
+          <span class="meta">{{ traditional_draw_result.draw_date_jp }}</span>
+        </div>
+        {% if traditional_draw_result.draw_subtitle %}
+          <p class="meta">Đợt phát hành: {{ traditional_draw_result.draw_subtitle }}</p>
+        {% endif %}
+        <p class="meta">Địa điểm: {{ traditional_draw_result.venue }}</p>
+        <p class="meta">Thời hạn lĩnh thưởng: {{ traditional_draw_result.payment_period }}</p>
+      </section>
+
+      <section class="panel">
+        <div class="row">
+          <h3>Kết quả dò vé truyền thống</h3>
+          <span class="meta">Vé trúng: {{ traditional_win_count }} | Tổng thưởng: {{ traditional_total_payout }}</span>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Tổ</th>
+              <th>Số vé</th>
+              <th>Trạng thái</th>
+              <th>Tổng tiền</th>
+              <th>Chi tiết giải</th>
+              <th>Lỗi</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in traditional_ticket_results %}
+              <tr>
+                <td>{{ row.index }}</td>
+                <td>{{ row.group }}</td>
+                <td>{{ row.number }}</td>
+                <td>{% if row.winning %}Trúng{% else %}Không trúng{% endif %}</td>
+                <td>{{ row.payout_display }}</td>
+                <td>
+                  {% if row.matches %}
+                    {% for m in row.matches %}
+                      <div>{{ m.rank }} - {{ m.amount }}</div>
+                    {% endfor %}
+                  {% endif %}
+                </td>
+                <td>{{ row.error }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </section>
+
+      <section class="panel">
+        <h3>Bảng kết quả kỳ quay</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Hạng/Giải</th>
+              <th>Giá trị</th>
+              <th>Tổ</th>
+              <th>Số</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in traditional_draw_result.prize_rows %}
+              <tr>
+                <td>{{ row.rank }}</td>
+                <td>{{ row.amount }}</td>
+                <td>{{ row.group }}</td>
+                <td>{{ row.number }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </section>
+    {% endif %}
+
+    <footer class="footer">© TinNV4</footer>
+  </main>
+
+  <div id="camera-modal" class="camera-modal" aria-hidden="true">
+    <div class="camera-backdrop"></div>
+    <div class="camera-card">
+      <div class="camera-head">
+        <h3>Quét vé bằng camera</h3>
+        <button type="button" id="camera-close-btn" class="icon-btn">×</button>
+      </div>
+      <video id="camera-video" autoplay playsinline></video>
+      <canvas id="camera-canvas" hidden></canvas>
+      <div class="camera-actions">
+        <button type="button" id="camera-capture-btn" class="btn-primary">Chụp và đọc</button>
+      </div>
+    </div>
+  </div>
+
+  {% if show_win_popup %}
+    <div id="win-modal" class="win-modal show" role="dialog" aria-modal="true" aria-label="Thông báo trúng thưởng">
+      <div class="win-backdrop"></div>
+      <div class="win-card">
+        <button type="button" id="close-win-modal" class="win-close" aria-label="Đóng">×</button>
+        <div class="win-headline">
+          <div class="win-icon" aria-hidden="true">🏆</div>
+          <div>
+            <p class="win-kicker">Chúc mừng</p>
+            <h2>Bạn có vé trúng thưởng</h2>
+            <p class="win-sub">Kết quả nổi bật của phiên dò hiện tại:</p>
+          </div>
+        </div>
+        <ul class="win-list">
+          {% for line in win_popup_lines %}
+            <li>
+              <span class="win-item-dot">✓</span>
+              <span>{{ line }}</span>
+            </li>
+          {% endfor %}
+        </ul>
+        <button type="button" id="close-win-modal-cta" class="btn-primary win-cta">Tuyệt vời</button>
+      </div>
+    </div>
+  {% endif %}
+
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <script>
+    const HISTORY_KEY = "lottery_checker_history_v1";
+    const HISTORY_LIMIT = 20;
+
+    const numberSpecs = {{ number_specs | tojson }};
+    const latestHistoryEntry = {{ history_entry | tojson }};
+
+    const checkerForm = document.getElementById("checker-form");
+    const gameSelect = document.getElementById("game-select");
+    const drawNumberInput = document.getElementById("draw-number-input");
+    const hint = document.getElementById("rule-hint");
+    const numberSection = document.getElementById("number-ticket-section");
+    const traditionalSection = document.getElementById("traditional-ticket-section");
+    const numberList = document.getElementById("number-ticket-list");
+    const traditionalList = document.getElementById("traditional-ticket-list");
+    const addButton = document.getElementById("add-ticket-btn");
+
+    const scanUploadButton = document.getElementById("scan-upload-btn");
+    const scanCameraButton = document.getElementById("scan-camera-btn");
+    const imageInput = document.getElementById("ticket-image-input");
+    const scanStatus = document.getElementById("scan-status");
+
+    const historyList = document.getElementById("history-list");
+    const clearHistoryButton = document.getElementById("clear-history-btn");
+
+    const cameraModal = document.getElementById("camera-modal");
+    const cameraVideo = document.getElementById("camera-video");
+    const cameraCanvas = document.getElementById("camera-canvas");
+    const cameraCloseButton = document.getElementById("camera-close-btn");
+    const cameraCaptureButton = document.getElementById("camera-capture-btn");
+
+    let currentCameraStream = null;
+
+    function normalizeDigits(text) {
+      const map = {
+        "０": "0", "１": "1", "２": "2", "３": "3", "４": "4",
+        "５": "5", "６": "6", "７": "7", "８": "8", "９": "9",
+      };
+      return (text || "").replace(/[０-９]/g, (ch) => map[ch] || ch);
+    }
+
+    function normalizeOcrText(text) {
+      let output = normalizeDigits(text);
+      output = output.replace(/[|｜]/g, "1");
+      output = output.replace(/(?<=\d)[Oo](?=\d)/g, "0");
+      output = output.replace(/[•·･]/g, " ");
+      output = output.replace(/[^\S\r\n]+/g, " ");
+      return output;
+    }
+
+    function uniqueStrings(values) {
+      const seen = new Set();
+      const out = [];
+      values.forEach((item) => {
+        if (!item || seen.has(item)) return;
+        seen.add(item);
+        out.push(item);
+      });
+      return out;
+    }
+
+    function extractDrawNumberFromText(text) {
+      const normalized = normalizeOcrText(text);
+      const patterns = [
+        /第\s*0*(\d{1,4})\s*回/,
+        /(?:第)?\s*0*(\d{1,4})\s*回/,
+      ];
+      for (const pattern of patterns) {
+        const match = normalized.match(pattern);
+        if (match) {
+          return String(Number(match[1]));
+        }
+      }
+      return "";
+    }
+
+    function renumberRows(container) {
+      container.querySelectorAll(".ticket-item").forEach((row, i) => {
+        const label = row.querySelector(".ticket-index");
+        if (label) label.textContent = `Vé ${i + 1}`;
+      });
+    }
+
+    function createNumberRow(value = "") {
+      const row = document.createElement("div");
+      row.className = "ticket-item";
+      row.innerHTML = `
+        <span class="ticket-index"></span>
+        <input type="text" name="tickets[]" placeholder="Ví dụ: 1 6 11 26 33 40">
+        <button type="button" class="btn-remove" aria-label="Xóa vé">Xóa</button>
+      `;
+      row.querySelector("input").value = value;
+      return row;
+    }
+
+    function createTraditionalRow(group = "", number = "") {
+      const row = document.createElement("div");
+      row.className = "ticket-item traditional";
+      row.innerHTML = `
+        <span class="ticket-index"></span>
+        <input type="text" name="ticket_groups[]" placeholder="Số tổ">
+        <input type="text" name="ticket_numbers[]" placeholder="Số vé">
+        <button type="button" class="btn-remove" aria-label="Xóa vé">Xóa</button>
+      `;
+      const inputs = row.querySelectorAll("input");
+      inputs[0].value = group;
+      inputs[1].value = number;
+      return row;
+    }
+
+    function bindRemove(container) {
+      container.addEventListener("click", (event) => {
+        if (!event.target.classList.contains("btn-remove")) return;
+        const rows = container.querySelectorAll(".ticket-item");
+        if (rows.length <= 1) return;
+        event.target.closest(".ticket-item").remove();
+        renumberRows(container);
+      });
+    }
+
+    function clearAndFillNumberTickets(tickets) {
+      numberList.innerHTML = "";
+      const values = tickets.length ? tickets : [""];
+      values.forEach((ticket) => {
+        numberList.appendChild(createNumberRow(ticket));
+      });
+      renumberRows(numberList);
+    }
+
+    function clearAndFillTraditionalTickets(tickets) {
+      traditionalList.innerHTML = "";
+      const values = tickets.length ? tickets : [{ group: "", number: "" }];
+      values.forEach((ticket) => {
+        traditionalList.appendChild(createTraditionalRow(ticket.group || "", ticket.number || ""));
+      });
+      renumberRows(traditionalList);
+    }
+
+    function setMode() {
+      const selected = gameSelect.value;
+      const spec = numberSpecs[selected];
+      const isNumber = Boolean(spec);
+      numberSection.style.display = isNumber ? "block" : "none";
+      traditionalSection.style.display = isNumber ? "none" : "block";
+
+      numberList.querySelectorAll("input").forEach((input) => { input.disabled = !isNumber; });
+      traditionalList.querySelectorAll("input").forEach((input) => { input.disabled = isNumber; });
+
+      if (isNumber) {
+        hint.textContent = `Mỗi vé nhập ${spec.picks} số không trùng nhau trong khoảng ${spec.min_number}-${spec.max_number}.`;
+      } else {
+        hint.textContent = "Mỗi vé nhập theo cặp Số tổ + Số vé.";
+      }
+    }
+
+    function parseNumberTicketsFromText(text) {
+      const spec = numberSpecs[gameSelect.value];
+      if (!spec) return [];
+      const normalized = normalizeOcrText(text)
+        .replace(/第\s*\d+\s*回/g, " ")
+        .replace(/\d+\s*組/g, " ");
+      const lines = normalized.split(/\r?\n/);
+      const tickets = [];
+
+      function lineToTickets(nums) {
+        const out = [];
+        if (nums.length < spec.picks) return out;
+
+        if (nums.length === spec.picks && new Set(nums).size === spec.picks) {
+          out.push(nums.join(" "));
+          return out;
+        }
+
+        for (let start = 0; start + spec.picks <= nums.length; start += 1) {
+          const chunk = nums.slice(start, start + spec.picks);
+          if (new Set(chunk).size === spec.picks) {
+            out.push(chunk.join(" "));
+          }
+        }
+        return out;
+      }
+
+      for (const line of lines) {
+        const nums = (line.match(/\d+/g) || [])
+          .map((n) => Number(n))
+          .filter((n) => n >= spec.min_number && n <= spec.max_number);
+        tickets.push(...lineToTickets(nums));
+      }
+
+      if (tickets.length) return uniqueStrings(tickets);
+
+      const all = (normalized.match(/\d+/g) || [])
+        .map((n) => Number(n))
+        .filter((n) => n >= spec.min_number && n <= spec.max_number);
+
+      for (let i = 0; i + spec.picks <= all.length; i += 1) {
+        const chunk = all.slice(i, i + spec.picks);
+        if (new Set(chunk).size === spec.picks) {
+          tickets.push(chunk.join(" "));
+        }
+      }
+
+      return uniqueStrings(tickets);
+    }
+
+    function parseTraditionalTicketsFromText(text) {
+      const normalized = normalizeOcrText(text);
+      const drawNo = extractDrawNumberFromText(normalized);
+      const lines = normalized.split(/\r?\n/);
+      const tickets = [];
+      const groupHints = [];
+
+      function addTicket(group, number) {
+        if (!group || !number) return;
+        if (drawNo && number === drawNo) return;
+        if (number.length < 5 || number.length > 7) return;
+        tickets.push({ group, number });
+      }
+
+      for (const line of lines) {
+        const groupMatch = line.match(/(\d{1,3})\s*組/);
+        if (groupMatch) {
+          groupHints.push(groupMatch[1]);
+        }
+
+        const pairRegex = /(\d{1,3})\s*組[^\d]*(\d{4,7})/g;
+        for (const pair of line.matchAll(pairRegex)) {
+          addTicket(pair[1], pair[2]);
+        }
+
+        if (!groupMatch) {
+          const reversePairRegex = /(\d{4,7})[^\d]*(\d{1,3})\s*組/g;
+          for (const pair of line.matchAll(reversePairRegex)) {
+            addTicket(pair[2], pair[1]);
+          }
+        }
+      }
+
+      if (!tickets.length) {
+        const fallbackGroup = groupHints[0] || "";
+        if (fallbackGroup) {
+          const numbers = normalized.match(/\d{4,7}/g) || [];
+          numbers
+            .filter((item) => item !== fallbackGroup)
+            .forEach((number) => addTicket(fallbackGroup, number));
+        }
+      }
+
+      if (!tickets.length) {
+        const loose = normalized.match(/\d+/g) || [];
+        for (let i = 0; i + 1 < loose.length; i += 2) {
+          const group = loose[i];
+          const number = loose[i + 1];
+          if (group.length <= 3 && number.length >= 5 && number.length <= 7) {
+            addTicket(group, number);
+          }
+        }
+      }
+
+      const deduped = [];
+      const seen = new Set();
+      for (const item of tickets) {
+        const key = `${item.group}-${item.number}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        deduped.push(item);
+      }
+      return deduped;
+    }
+
+    function enhanceCanvasForOcr(canvas) {
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const data = imageData.data;
+      let sum = 0;
+      for (let i = 0; i < data.length; i += 4) {
+        const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+        sum += gray;
+      }
+      const avg = sum / (data.length / 4);
+      const threshold = Math.max(95, Math.min(205, avg * 0.95));
+
+      for (let i = 0; i < data.length; i += 4) {
+        const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+        const value = gray > threshold ? 255 : 0;
+        data[i] = value;
+        data[i + 1] = value;
+        data[i + 2] = value;
+      }
+      ctx.putImageData(imageData, 0, 0);
+      return canvas;
+    }
+
+    function applyOcrText(text) {
+      const drawNo = extractDrawNumberFromText(text);
+      if (drawNo) {
+        drawNumberInput.value = drawNo;
+      }
+
+      const isNumberMode = Boolean(numberSpecs[gameSelect.value]);
+      if (isNumberMode) {
+        const parsed = parseNumberTicketsFromText(text);
+        if (!parsed.length) {
+          scanStatus.textContent = "Không nhận diện được vé hợp lệ từ ảnh.";
+          return;
+        }
+        clearAndFillNumberTickets(parsed);
+        setMode();
+        scanStatus.textContent = `Đã nhận diện ${parsed.length} vé Loto${drawNo ? ` • Kỳ ${drawNo}` : ""}.`;
+        return;
+      }
+
+      const parsed = parseTraditionalTicketsFromText(text);
+      if (!parsed.length) {
+        scanStatus.textContent = "Không nhận diện được tổ/số vé từ ảnh.";
+        return;
+      }
+      clearAndFillTraditionalTickets(parsed);
+      setMode();
+      scanStatus.textContent = `Đã nhận diện ${parsed.length} vé truyền thống${drawNo ? ` • Kỳ ${drawNo}` : ""}.`;
+    }
+
+    async function runOcr(source) {
+      if (!window.Tesseract) {
+        scanStatus.textContent = "Không tải được OCR engine.";
+        return;
+      }
+      scanStatus.textContent = "Đang nhận dạng chữ từ ảnh...";
+      try {
+        const result = await Tesseract.recognize(source, "eng+jpn", {
+          tessedit_pageseg_mode: "6",
+        });
+        applyOcrText(result.data.text || "");
+      } catch (error) {
+        scanStatus.textContent = "OCR thất bại. Vui lòng thử lại ảnh rõ hơn.";
+      }
+    }
+
+    function getHistory() {
+      try {
+        const raw = localStorage.getItem(HISTORY_KEY);
+        return raw ? JSON.parse(raw) : [];
+      } catch {
+        return [];
+      }
+    }
+
+    function saveHistoryEntry(entry) {
+      if (!entry || !entry.game) return;
+      const history = getHistory();
+      const withMeta = {
+        ...entry,
+        saved_at: new Date().toISOString(),
+      };
+      const deduped = history.filter((item) => JSON.stringify(item.tickets) !== JSON.stringify(withMeta.tickets));
+      deduped.unshift(withMeta);
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(deduped.slice(0, HISTORY_LIMIT)));
+    }
+
+    function formatTime(iso) {
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return "";
+      return d.toLocaleString("vi-VN");
+    }
+
+    function applyHistoryEntry(entry) {
+      gameSelect.value = entry.game || "traditional:zenkoku";
+      drawNumberInput.value = entry.draw_number || "";
+
+      if (entry.mode === "number") {
+        clearAndFillNumberTickets((entry.tickets || []).map((item) => item.raw || ""));
+        clearAndFillTraditionalTickets([{ group: "", number: "" }]);
+      } else {
+        clearAndFillTraditionalTickets(
+          (entry.tickets || []).map((item) => ({ group: item.group || "", number: item.number || "" }))
+        );
+        clearAndFillNumberTickets([""]);
+      }
+
+      setMode();
+      checkerForm.submit();
+    }
+
+    function renderHistory() {
+      const history = getHistory();
+      historyList.innerHTML = "";
+      if (!history.length) {
+        historyList.innerHTML = "<p class=\"history-empty\">Chưa có lịch sử dò vé.</p>";
+        return;
+      }
+      history.forEach((entry, index) => {
+        const item = document.createElement("div");
+        item.className = "history-item";
+        item.innerHTML = `
+          <div class="history-main">
+            <div class="history-title">${entry.game || "-"} | Kỳ ${entry.draw_number || "-"}</div>
+            <div class="history-meta">${entry.summary || ""} • ${formatTime(entry.saved_at)}</div>
+          </div>
+          <button type="button" class="btn-history-view" data-index="${index}">Xem lại</button>
+        `;
+        historyList.appendChild(item);
+      });
+
+      historyList.querySelectorAll(".btn-history-view").forEach((button) => {
+        button.addEventListener("click", () => {
+          const index = Number(button.dataset.index);
+          const history = getHistory();
+          const entry = history[index];
+          if (entry) applyHistoryEntry(entry);
+        });
+      });
+    }
+
+    addButton.addEventListener("click", () => {
+      const isNumberMode = Boolean(numberSpecs[gameSelect.value]);
+      if (isNumberMode) {
+        numberList.appendChild(createNumberRow());
+        renumberRows(numberList);
+      } else {
+        traditionalList.appendChild(createTraditionalRow());
+        renumberRows(traditionalList);
+      }
+      setMode();
+    });
+
+    bindRemove(numberList);
+    bindRemove(traditionalList);
+
+    scanUploadButton.addEventListener("click", () => imageInput.click());
+    imageInput.addEventListener("change", async () => {
+      const file = imageInput.files && imageInput.files[0];
+      if (!file) return;
+      await runOcr(file);
+      imageInput.value = "";
+    });
+
+    async function openCamera() {
+      try {
+        currentCameraStream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: { ideal: "environment" },
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+          },
+        });
+        cameraVideo.srcObject = currentCameraStream;
+        cameraModal.classList.add("show");
+        cameraModal.setAttribute("aria-hidden", "false");
+        scanStatus.textContent = "Đưa vé vào khung, giữ máy ổn định rồi bấm Chụp và đọc.";
+      } catch (error) {
+        scanStatus.textContent = "Không truy cập được camera.";
+      }
+    }
+
+    function closeCamera() {
+      cameraModal.classList.remove("show");
+      cameraModal.setAttribute("aria-hidden", "true");
+      if (currentCameraStream) {
+        currentCameraStream.getTracks().forEach((track) => track.stop());
+        currentCameraStream = null;
+      }
+      cameraVideo.srcObject = null;
+    }
+
+    scanCameraButton.addEventListener("click", openCamera);
+    cameraCloseButton.addEventListener("click", closeCamera);
+    cameraModal.querySelector(".camera-backdrop").addEventListener("click", closeCamera);
+
+    cameraCaptureButton.addEventListener("click", async () => {
+      if (!cameraVideo.videoWidth || !cameraVideo.videoHeight) return;
+      const ctx = cameraCanvas.getContext("2d");
+      const scale = 1.6;
+      cameraCanvas.width = Math.floor(cameraVideo.videoWidth * scale);
+      cameraCanvas.height = Math.floor(cameraVideo.videoHeight * scale);
+      ctx.imageSmoothingEnabled = true;
+      ctx.drawImage(cameraVideo, 0, 0, cameraCanvas.width, cameraCanvas.height);
+      enhanceCanvasForOcr(cameraCanvas);
+      closeCamera();
+      await runOcr(cameraCanvas);
+    });
+
+    const clearHistory = () => {
+      localStorage.removeItem(HISTORY_KEY);
+      renderHistory();
+    };
+    clearHistoryButton.addEventListener("click", clearHistory);
+
+    gameSelect.addEventListener("change", setMode);
+
+    renumberRows(numberList);
+    renumberRows(traditionalList);
+    setMode();
+    renderHistory();
+
+    if (latestHistoryEntry) {
+      saveHistoryEntry(latestHistoryEntry);
+      renderHistory();
+    }
+
+    const modal = document.getElementById("win-modal");
+    if (modal) {
+      const closeButtons = [
+        document.getElementById("close-win-modal"),
+        document.getElementById("close-win-modal-cta"),
+      ];
+      closeButtons.forEach((btn) => {
+        if (!btn) return;
+        btn.addEventListener("click", () => modal.classList.remove("show"));
+      });
+      modal.querySelector(".win-backdrop").addEventListener("click", () => modal.classList.remove("show"));
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+          modal.classList.remove("show");
+        }
+      });
+    }
+  </script>
+</body>
+</html>
