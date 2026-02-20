@@ -75,7 +75,12 @@
         <div class="chips">
           <span>Kỳ gần đây:</span>
           {% for draw_no in recent_draw_numbers %}
-            <button type="submit" name="draw_number" value="{{ draw_no }}" class="chip">{{ draw_no }}</button>
+            <button
+              type="submit"
+              name="recent_draw_number"
+              value="{{ draw_no }}"
+              class="chip {% if draw_number_input and draw_number_input == (draw_no|string) %}active{% endif %}"
+            >{{ draw_no }}</button>
           {% endfor %}
         </div>
       {% endif %}

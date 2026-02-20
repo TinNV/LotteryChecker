@@ -280,7 +280,8 @@ def _track_request_end(response: Response) -> Response:
 def index() -> str:
     game_options = _build_game_options()
     selected_game = request.values.get("game", "traditional:zenkoku")
-    draw_number_input = request.values.get("draw_number", "").strip()
+    recent_draw_number = request.values.get("recent_draw_number", "").strip()
+    draw_number_input = recent_draw_number or request.values.get("draw_number", "").strip()
     number_ticket_rows = _extract_number_ticket_rows() if request.method == "POST" else [""]
     traditional_ticket_rows = (
         _extract_traditional_ticket_rows() if request.method == "POST" else [{"group": "", "number": ""}]
