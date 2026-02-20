@@ -465,6 +465,19 @@ def admin() -> Response | str:
     traffic = traffic_tracker.snapshot(top_paths=15, recent_limit=80)
     recent_searches = search_store.list_recent_searches(limit=100) if search_store else []
     search_store_enabled = bool(search_store and search_store.enabled)
+    dynamo_status_detail = ""
+    if not search_store:
+        table_name = os.environ.get("DYNAMODB_SEARCH_TABLE", "").strip()
+        if not table_name:
+            dynamo_status_detail = "DYNAMODB_SEARCH_TABLE is empty"
+        else:
+            region_name = os.environ.get("AWS_REGION", "").strip() or os.environ.get("AWS_DEFAULT_REGION", "").strip()
+            if not region_name:
+                region_name = "ap-northeast-1"
+            dynamo_status_detail = f"Failed to initialize store (table={table_name}, region={region_name})"
+    elif not search_store.enabled:
+        dynamo_status_detail = str(getattr(search_store, "last_error", "")).strip()
+
     return render_template(
         "admin.html",
         traffic=traffic,
@@ -472,6 +485,7 @@ def admin() -> Response | str:
         search_store_enabled=search_store_enabled,
         dynamo_table_name=search_store.table_name if search_store else "",
         search_ttl_days=search_store.ttl_days if search_store else 0,
+        dynamo_status_detail=dynamo_status_detail,
     )
 
 

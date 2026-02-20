@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import Counter, deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import logging
 from threading import Lock
 from time import time
 from typing import Any, Callable, Deque, Dict, List
@@ -28,6 +29,9 @@ except Exception:  # pragma: no cover - optional dependency fallback
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass
@@ -172,10 +176,15 @@ class DynamoSearchHistoryStore:
         self._dynamodb = boto3.resource("dynamodb", region_name=region_name)
         self._table = self._dynamodb.Table(table_name)
         self._enabled = True
+        self._last_error = ""
 
     @property
     def enabled(self) -> bool:
         return self._enabled
+
+    @property
+    def last_error(self) -> str:
+        return self._last_error
 
     def save_search(
         self,
@@ -215,8 +224,10 @@ class DynamoSearchHistoryStore:
 
         try:
             self._table.put_item(Item=item)
-        except (ClientError, BotoCoreError):
+        except (ClientError, BotoCoreError) as exc:
             self._enabled = False
+            self._last_error = f"{type(exc).__name__}: {exc}"
+            LOGGER.warning("DynamoDB search history disabled: %s", self._last_error)
 
     def list_recent_searches(self, limit: int = 100) -> List[Dict[str, Any]]:
         if not self._enabled:
@@ -227,8 +238,10 @@ class DynamoSearchHistoryStore:
                 ScanIndexForward=False,
                 Limit=max(1, min(limit, 200)),
             )
-        except (ClientError, BotoCoreError):
+        except (ClientError, BotoCoreError) as exc:
             self._enabled = False
+            self._last_error = f"{type(exc).__name__}: {exc}"
+            LOGGER.warning("DynamoDB search history disabled: %s", self._last_error)
             return []
 
         items = response.get("Items", [])

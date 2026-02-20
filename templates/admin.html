@@ -111,7 +111,10 @@
         {% if search_store_enabled %}
           <span class="meta">Table: {{ dynamo_table_name }} | TTL: {{ search_ttl_days }} days</span>
         {% else %}
-          <span class="meta">DynamoDB disabled or unavailable</span>
+          <span class="meta">
+            DynamoDB disabled or unavailable
+            {% if dynamo_status_detail %}: {{ dynamo_status_detail }}{% endif %}
+          </span>
         {% endif %}
       </div>
       <table>

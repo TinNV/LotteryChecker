@@ -317,3 +317,58 @@ Open admin dashboard:
 ```text
 https://<your-domain>/admin
 ```
+
+### 10.4 Troubleshooting: `DynamoDB disabled or unavailable` on EC2
+
+Run these checks on the EC2 host:
+
+```bash
+cd ~/lottery-checker
+grep -E '^(AWS_REGION|DYNAMODB_SEARCH_TABLE|SEARCH_HISTORY_TTL_DAYS)=' .env
+docker compose -f deploy/ec2/docker-compose.yml --env-file .env exec app env | grep -E '^(AWS_REGION|DYNAMODB_SEARCH_TABLE)='
+```
+
+Quick runtime check from inside container:
+
+```bash
+cd ~/lottery-checker
+docker compose -f deploy/ec2/docker-compose.yml --env-file .env exec app python - <<'PY'
+import os
+import boto3
+from boto3.dynamodb.conditions import Key
+
+region = os.getenv("AWS_REGION", "ap-northeast-1")
+table = os.getenv("DYNAMODB_SEARCH_TABLE", "")
+print("AWS_REGION =", region)
+print("DYNAMODB_SEARCH_TABLE =", table or "<empty>")
+
+try:
+    ident = boto3.client("sts", region_name=region).get_caller_identity()
+    print("STS caller =", ident.get("Arn"))
+except Exception as exc:
+    print("STS error:", type(exc).__name__, exc)
+    raise SystemExit(1)
+
+if not table:
+    raise SystemExit(1)
+
+try:
+    rows = boto3.resource("dynamodb", region_name=region).Table(table).query(
+        KeyConditionExpression=Key("pk").eq("SEARCH"),
+        Limit=1,
+    )
+    print("DynamoDB query ok, count =", rows.get("Count"))
+except Exception as exc:
+    print("DynamoDB query error:", type(exc).__name__, exc)
+    raise SystemExit(1)
+PY
+```
+
+If you recently fixed IAM or env values, restart app container to re-enable store:
+
+```bash
+cd ~/lottery-checker
+docker compose -f deploy/ec2/docker-compose.yml --env-file .env restart app
+```
+
+If STS fails inside container with credential errors, attach an EC2 instance role and ensure IMDSv2 hop limit is at least `2` for Dockerized workloads.
