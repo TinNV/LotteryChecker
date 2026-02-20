@@ -8,8 +8,6 @@ services:
     image: lottery-checker:latest
     container_name: lottery-checker-app
     restart: unless-stopped
-    ports:
-      - "${APP_PORT:-80}:8080"
     environment:
       HOST: "0.0.0.0"
       PORT: "8080"
@@ -18,7 +16,7 @@ services:
       DYNAMODB_SEARCH_TABLE: "${DYNAMODB_SEARCH_TABLE:-}"
       SEARCH_HISTORY_TTL_DAYS: "${SEARCH_HISTORY_TTL_DAYS:-30}"
       ADMIN_USER: "${ADMIN_USER:-admin}"
-      ADMIN_PASSWORD: "${ADMIN_PASSWORD:-admin_P@ssw0rd}"
+      ADMIN_PASSWORD: "${ADMIN_PASSWORD:-}"
     healthcheck:
       test:
         [
@@ -35,3 +33,29 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+  caddy:
+    image: caddy:2.10-alpine
+    container_name: lottery-checker-caddy
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: "${DOMAIN:?Set DOMAIN env var, for example DOMAIN=lottery.example.com}"
+      LETSENCRYPT_EMAIL: "${LETSENCRYPT_EMAIL:-}"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  caddy_data:
+  caddy_config:

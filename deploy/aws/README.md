@@ -78,6 +78,25 @@ PROJECT_NAME=lottery-checker AWS_REGION=ap-northeast-1 ./deploy-simple.sh
 .\deploy-simple.ps1 -ProjectName lottery-checker -AwsRegion ap-northeast-1
 ```
 
+## Utility Script: Create DynamoDB Search Table
+
+For the EC2 admin dashboard search history feature, you can auto-create DynamoDB table + TTL:
+
+### Linux / macOS
+
+```bash
+cd deploy/aws
+chmod +x create-dynamodb-search-history.sh
+./create-dynamodb-search-history.sh
+```
+
+### Windows (PowerShell)
+
+```powershell
+cd deploy\aws
+.\create-dynamodb-search-history.ps1
+```
+
 ## Deployment Output
 
 After deploy, scripts create:

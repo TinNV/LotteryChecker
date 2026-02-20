@@ -2,7 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-COMPOSE_FILE="$ROOT_DIR/deploy/ec2/docker-compose.yml"
+COMPOSE_FILE="$ROOT_DIR/deploy/ec2/docker-compose.https.yml"
+LEGACY_COMPOSE_FILE="$ROOT_DIR/deploy/ec2/docker-compose.yml"
 ENV_FILE="$ROOT_DIR/.env"
 
 load_env_file() {
@@ -39,10 +40,18 @@ fi
 cd "$ROOT_DIR"
 load_env_file
 
+if [[ -z "${DOMAIN:-}" ]]; then
+  echo "[ERROR] DOMAIN is required. Example: DOMAIN=lottery.example.com ./deploy/ec2/update-https.sh"
+  exit 1
+fi
+
 echo "[INFO] Pulling latest code..."
 git pull --ff-only
 
-echo "[INFO] Rebuilding and restarting LotteryChecker..."
+echo "[INFO] Stopping legacy HTTP stack if running..."
+run_compose "$LEGACY_COMPOSE_FILE" down --remove-orphans >/dev/null 2>&1 || true
+
+echo "[INFO] Rebuilding and restarting LotteryChecker with HTTPS..."
 run_compose "$COMPOSE_FILE" up -d --build --remove-orphans
 
 echo "[INFO] Cleaning dangling Docker images..."
@@ -52,3 +61,4 @@ echo "[INFO] Service status:"
 run_compose "$COMPOSE_FILE" ps
 
 echo "[INFO] Update complete."
+echo "[INFO] URL: https://$DOMAIN/"

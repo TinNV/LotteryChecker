@@ -2,9 +2,17 @@ from __future__ import annotations
 
 from dataclasses import asdict
 import os
+from time import perf_counter
 from typing import Any, Dict, List, Tuple
 
-from flask import Flask, render_template, request
+try:
+    from dotenv import load_dotenv
+except Exception:  # pragma: no cover - optional dependency fallback
+    def load_dotenv(*args: Any, **kwargs: Any) -> bool:
+        return False
+from flask import Flask, Response, render_template, request
+
+from lottery_checker.analytics import TrafficTracker, create_search_store_from_env
 
 from lottery_checker import (
     LotteryDataError,
@@ -20,8 +28,78 @@ from lottery_checker import (
     parse_traditional_ticket,
 )
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+load_dotenv(os.path.join(BASE_DIR, ".env"), override=False)
+
 app = Flask(__name__)
 client = MizuhoLotteryClient(timeout_seconds=15)
+traffic_tracker = TrafficTracker(max_recent=500)
+search_store = create_search_store_from_env()
+
+
+def _client_ip() -> str:
+    forwarded = request.headers.get("X-Forwarded-For", "").strip()
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.remote_addr or "-"
+
+
+def _is_local_admin_request() -> bool:
+    host = (request.host or "").split(":", 1)[0].strip().lower()
+    return host in {"127.0.0.1", "localhost", "::1"}
+
+
+def _admin_auth_guard() -> Response | None:
+    expected_user = os.environ.get("ADMIN_USER", "admin").strip() or "admin"
+    expected_password = os.environ.get("ADMIN_PASSWORD", "").strip()
+    if (not expected_password) and _is_local_admin_request():
+        expected_password = "admin_P@ssw0rd"
+
+    if not expected_password:
+        return Response("Admin password is not configured.", status=503, mimetype="text/plain")
+
+    auth = request.authorization
+    if auth and auth.username == expected_user and auth.password == expected_password:
+        return None
+
+    response = Response("Authentication required.", status=401, mimetype="text/plain")
+    response.headers["WWW-Authenticate"] = 'Basic realm="LotteryChecker Admin"'
+    return response
+
+
+def _persist_search_history(
+    *,
+    history_entry: Dict[str, Any] | None,
+    number_ticket_results: List[Dict[str, Any]],
+    traditional_ticket_results: List[Dict[str, Any]],
+) -> None:
+    if search_store is None or history_entry is None:
+        return
+
+    mode = str(history_entry.get("mode", ""))
+    game = str(history_entry.get("game", ""))
+    draw_number = str(history_entry.get("draw_number", ""))
+    summary = str(history_entry.get("summary", ""))
+    ticket_count = len(history_entry.get("tickets") or [])
+    if mode == "number":
+        winning_count = sum(1 for row in number_ticket_results if row.get("winning"))
+    else:
+        winning_count = sum(1 for row in traditional_ticket_results if row.get("winning"))
+
+    try:
+        search_store.save_search(
+            mode=mode,
+            game=game,
+            draw_number=draw_number,
+            summary=summary,
+            ticket_count=ticket_count,
+            winning_count=winning_count,
+            client_ip=_client_ip(),
+            user_agent=request.headers.get("User-Agent", ""),
+        )
+    except Exception:
+        # Search persistence should never break the page response.
+        return
 
 
 def _number_specs_payload() -> Dict[str, Dict[str, Any]]:
@@ -76,6 +154,38 @@ def _extract_traditional_ticket_rows() -> List[Dict[str, str]]:
     return rows
 
 
+def _extract_yen_amount(value: Any) -> int | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text or text == "-":
+        return None
+    digits = "".join(ch for ch in text if ch.isdigit())
+    if not digits:
+        return None
+    return int(digits)
+
+
+def _format_payout_summary(total: int, unknown: int) -> str:
+    if unknown:
+        return f"{total:,}円 + {unknown} vé chưa xác định"
+    return f"{total:,}円"
+
+
+def _sum_known_number_payout(results: List[Dict[str, Any]]) -> str:
+    total = 0
+    unknown = 0
+    for row in results:
+        if not row.get("winning"):
+            continue
+        value = _extract_yen_amount(row.get("payout"))
+        if value is None:
+            unknown += 1
+        else:
+            total += value
+    return _format_payout_summary(total, unknown)
+
+
 def _sum_known_traditional_payout(results: List[Dict[str, Any]]) -> str:
     total = 0
     unknown = 0
@@ -87,9 +197,7 @@ def _sum_known_traditional_payout(results: List[Dict[str, Any]]) -> str:
             unknown += 1
         else:
             total += int(value)
-    if unknown:
-        return f"{total:,}円 + {unknown} vé chưa xác định"
-    return f"{total:,}円"
+    return _format_payout_summary(total, unknown)
 
 
 def _build_history_entry(
@@ -107,27 +215,52 @@ def _build_history_entry(
         if not non_empty_rows:
             return None
         draw_no = number_draw_result.draw_number if number_draw_result else ""
+        ticket_total = len(non_empty_rows)
         win_count = sum(1 for row in number_ticket_results if row.get("winning"))
+        payout_summary = _sum_known_number_payout(number_ticket_results)
         return {
             "mode": "number",
             "game": selected_game,
             "draw_number": str(draw_no),
             "tickets": [{"raw": row} for row in non_empty_rows],
-            "summary": f"{win_count}/{len(non_empty_rows)} vé trúng",
+            "summary": f"{ticket_total} vé | {win_count} trúng | Thưởng: {payout_summary}",
         }
 
     non_empty_rows = [row for row in traditional_ticket_rows if row["group"] or row["number"]]
     if not non_empty_rows:
         return None
     draw_no = traditional_draw_result.draw_order if traditional_draw_result else ""
+    ticket_total = len(non_empty_rows)
     win_count = sum(1 for row in traditional_ticket_results if row.get("winning"))
+    payout_summary = _sum_known_traditional_payout(traditional_ticket_results)
     return {
         "mode": "traditional",
         "game": selected_game,
         "draw_number": str(draw_no),
         "tickets": [{"group": row["group"], "number": row["number"]} for row in non_empty_rows],
-        "summary": f"{win_count}/{len(non_empty_rows)} vé trúng",
+        "summary": f"{ticket_total} vé | {win_count} trúng | Thưởng: {payout_summary}",
     }
+
+
+@app.before_request
+def _track_request_start() -> None:
+    request.environ["lottery_checker.request_start"] = perf_counter()
+
+
+@app.after_request
+def _track_request_end(response: Response) -> Response:
+    start = request.environ.get("lottery_checker.request_start")
+    duration_ms = int((perf_counter() - start) * 1000) if isinstance(start, float) else 0
+    traffic_tracker.record(
+        method=request.method,
+        path=request.path,
+        status_code=response.status_code,
+        ip=_client_ip(),
+        duration_ms=duration_ms,
+        accept=request.headers.get("Accept", ""),
+        user_agent=request.headers.get("User-Agent", ""),
+    )
+    return response
 
 
 @app.route("/", methods=["GET", "POST"])
@@ -292,6 +425,13 @@ def index() -> str:
 
     show_win_popup = request.method == "POST" and len(win_popup_lines) > 0 and not error
 
+    if request.method == "POST" and not error:
+        _persist_search_history(
+            history_entry=history_entry,
+            number_ticket_results=number_ticket_results,
+            traditional_ticket_results=traditional_ticket_results,
+        )
+
     return render_template(
         "index.html",
         game_options=game_options,
@@ -313,6 +453,25 @@ def index() -> str:
         show_win_popup=show_win_popup,
         win_popup_lines=win_popup_lines,
         history_entry=history_entry,
+    )
+
+
+@app.get("/admin")
+def admin() -> Response | str:
+    auth_failed = _admin_auth_guard()
+    if auth_failed is not None:
+        return auth_failed
+
+    traffic = traffic_tracker.snapshot(top_paths=15, recent_limit=80)
+    recent_searches = search_store.list_recent_searches(limit=100) if search_store else []
+    search_store_enabled = bool(search_store and search_store.enabled)
+    return render_template(
+        "admin.html",
+        traffic=traffic,
+        recent_searches=recent_searches,
+        search_store_enabled=search_store_enabled,
+        dynamo_table_name=search_store.table_name if search_store else "",
+        search_ttl_days=search_store.ttl_days if search_store else 0,
     )
 
 

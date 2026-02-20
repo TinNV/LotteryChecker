@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LotteryChecker Admin</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <main class="app-shell admin-shell">
+    <section class="hero admin-hero">
+      <h1>Admin Dashboard</h1>
+      <p>Traffic overview and DynamoDB search history.</p>
+    </section>
+
+    <section class="panel">
+      <div class="row">
+        <h2>Traffic Summary</h2>
+        <span class="meta">Total requests: {{ traffic.total_requests }}</span>
+      </div>
+      <div class="meta-grid">
+        {% for status, count in traffic.status_counts %}
+          <p><strong>{{ status }}</strong>: {{ count }}</p>
+        {% endfor %}
+      </div>
+    </section>
+
+    <section class="panel">
+      <h3>Traffic Graphs</h3>
+      <div class="chart-grid">
+        <div class="chart-card">
+          <h4>Requests per Minute (UTC)</h4>
+          <div class="chart-canvas-wrap">
+            <canvas id="traffic-line-chart"></canvas>
+          </div>
+        </div>
+        <div class="chart-card">
+          <h4>Status Distribution</h4>
+          <div class="chart-canvas-wrap">
+            <canvas id="status-donut-chart"></canvas>
+          </div>
+        </div>
+        <div class="chart-card">
+          <h4>Top Paths</h4>
+          <div class="chart-canvas-wrap">
+            <canvas id="path-bar-chart"></canvas>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h3>Top Paths</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Path</th>
+            <th>Requests</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for path, count in traffic.top_paths %}
+            <tr>
+              <td>{{ path }}</td>
+              <td>{{ count }}</td>
+            </tr>
+          {% else %}
+            <tr>
+              <td colspan="2">No traffic yet.</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="panel">
+      <h3>Recent Requests</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Time (UTC)</th>
+            <th>Method</th>
+            <th>Path</th>
+            <th>Status</th>
+            <th>IP</th>
+            <th>Duration</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in traffic.recent_requests %}
+            <tr>
+              <td>{{ row.timestamp }}</td>
+              <td>{{ row.method }}</td>
+              <td>{{ row.path }}</td>
+              <td>{{ row.status_code }}</td>
+              <td>{{ row.ip }}</td>
+              <td>{{ row.duration_ms }} ms</td>
+            </tr>
+          {% else %}
+            <tr>
+              <td colspan="6">No request records yet.</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="panel">
+      <div class="row">
+        <h3>DynamoDB Search History</h3>
+        {% if search_store_enabled %}
+          <span class="meta">Table: {{ dynamo_table_name }} | TTL: {{ search_ttl_days }} days</span>
+        {% else %}
+          <span class="meta">DynamoDB disabled or unavailable</span>
+        {% endif %}
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Time (UTC)</th>
+            <th>Mode</th>
+            <th>Game</th>
+            <th>Draw</th>
+            <th>Tickets</th>
+            <th>Wins</th>
+            <th>Summary</th>
+            <th>IP</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in recent_searches %}
+            <tr>
+              <td>{{ item.created_at_iso }}</td>
+              <td>{{ item.mode }}</td>
+              <td>{{ item.game }}</td>
+              <td>{{ item.draw_number }}</td>
+              <td>{{ item.ticket_count }}</td>
+              <td>{{ item.winning_count }}</td>
+              <td>{{ item.summary }}</td>
+              <td>{{ item.client_ip }}</td>
+            </tr>
+          {% else %}
+            <tr>
+              <td colspan="8">No search records yet.</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </section>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script>
+    const minuteSeries = {{ traffic.minute_series | tojson }};
+    const statusCounts = {{ traffic.status_counts | tojson }};
+    const topPaths = {{ traffic.top_paths | tojson }};
+    const chartRegistry = (window.__lotteryAdminCharts = window.__lotteryAdminCharts || {});
+
+    function resetChart(name) {
+      const existing = chartRegistry[name];
+      if (existing && typeof existing.destroy === "function") {
+        existing.destroy();
+      }
+      chartRegistry[name] = null;
+    }
+
+    function buildTrafficLineChart() {
+      const canvas = document.getElementById("traffic-line-chart");
+      if (!canvas || !window.Chart) return;
+      resetChart("trafficLine");
+      chartRegistry.trafficLine = new Chart(canvas, {
+        type: "line",
+        data: {
+          labels: minuteSeries.map((row) => row.minute),
+          datasets: [
+            {
+              label: "Requests",
+              data: minuteSeries.map((row) => row.count),
+              borderColor: "#0b6d53",
+              backgroundColor: "rgba(11,109,83,0.16)",
+              pointRadius: 2,
+              tension: 0.25,
+              fill: true,
+            },
+          ],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          animation: false,
+          resizeDelay: 120,
+          scales: {
+            y: { beginAtZero: true, ticks: { precision: 0 } },
+            x: { ticks: { maxRotation: 0, autoSkip: true, maxTicksLimit: 10 } },
+          },
+          plugins: { legend: { display: false } },
+        },
+      });
+    }
+
+    function buildStatusDonutChart() {
+      const canvas = document.getElementById("status-donut-chart");
+      if (!canvas || !window.Chart) return;
+      resetChart("statusDonut");
+      chartRegistry.statusDonut = new Chart(canvas, {
+        type: "doughnut",
+        data: {
+          labels: statusCounts.map((row) => String(row[0])),
+          datasets: [
+            {
+              data: statusCounts.map((row) => row[1]),
+              backgroundColor: ["#0b6d53", "#0d6efd", "#f59e0b", "#ef4444", "#64748b"],
+              borderWidth: 1,
+            },
+          ],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          animation: false,
+          resizeDelay: 120,
+          plugins: {
+            legend: { position: "bottom" },
+          },
+        },
+      });
+    }
+
+    function buildPathBarChart() {
+      const canvas = document.getElementById("path-bar-chart");
+      if (!canvas || !window.Chart) return;
+      resetChart("pathBar");
+      chartRegistry.pathBar = new Chart(canvas, {
+        type: "bar",
+        data: {
+          labels: topPaths.map((row) => row[0]),
+          datasets: [
+            {
+              label: "Requests",
+              data: topPaths.map((row) => row[1]),
+              backgroundColor: "#0e8c69",
+            },
+          ],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          animation: false,
+          resizeDelay: 120,
+          indexAxis: "y",
+          scales: {
+            x: { beginAtZero: true, ticks: { precision: 0 } },
+          },
+          plugins: { legend: { display: false } },
+        },
+      });
+    }
+
+    buildTrafficLineChart();
+    buildStatusDonutChart();
+    buildPathBarChart();
+  </script>
+</body>
+</html>
