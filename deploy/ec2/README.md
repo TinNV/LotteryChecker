@@ -69,17 +69,58 @@ chmod +x deploy/ec2/deploy.sh deploy/ec2/update.sh
 ./deploy/ec2/deploy.sh
 ```
 
+If script execute permission is missing, run via bash directly:
+
+```bash
+bash deploy/ec2/deploy.sh
+```
+
 Open:
 
 ```text
 http://<SERVER_PUBLIC_IP>/
 ```
 
+### 4.1 Copy local `.env` to EC2 (optional)
+
+Use this when `.env` is kept only on your local machine and is not committed to Git.
+
+From local Windows PowerShell:
+
+```powershell
+cd C:\WIP\AI\LotteryChecker
+.\deploy\ec2\copy-env-to-ec2.ps1 -HostName <SERVER_PUBLIC_DNS_OR_IP> -KeyFile .\deploy\ec2\<your-key>.pem
+```
+
+If PowerShell execution policy blocks script execution:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\deploy\ec2\copy-env-to-ec2.ps1 -HostName <SERVER_PUBLIC_DNS_OR_IP> -KeyFile .\deploy\ec2\<your-key>.pem
+```
+
+From local Linux/macOS shell:
+
+```bash
+cd /path/to/lottery-checker
+chmod +x deploy/ec2/copy-env-to-ec2.sh
+./deploy/ec2/copy-env-to-ec2.sh --host <SERVER_PUBLIC_DNS_OR_IP> --key ./deploy/ec2/<your-key>.pem
+```
+
+Optional flags:
+- PowerShell: `-RemoteUser`, `-RemoteDir`, `-LocalEnvFile`, `-Port`
+- Bash: `--user`, `--remote-dir`, `--env-file`, `--port`
+
 ## 5. Update later
 
 ```bash
 cd ~/lottery-checker
 ./deploy/ec2/update.sh
+```
+
+Fallback without execute bit:
+
+```bash
+bash deploy/ec2/update.sh
 ```
 
 ## 6. Basic operations
