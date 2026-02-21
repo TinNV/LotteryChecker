@@ -243,7 +243,13 @@
         <h3>Quét vé bằng camera</h3>
         <button type="button" id="camera-close-btn" class="icon-btn">×</button>
       </div>
-      <video id="camera-video" autoplay playsinline></video>
+      <div class="camera-stage">
+        <video id="camera-video" autoplay playsinline></video>
+        <div id="camera-frame" class="camera-frame">
+          <span class="frame-tag">Vùng quét</span>
+          <span class="frame-note">Căn dòng có “第xx回 / xx組 / số vé 6 chữ số” vào khung</span>
+        </div>
+      </div>
       <canvas id="camera-canvas" hidden></canvas>
       <div class="camera-actions">
         <button type="button" id="camera-capture-btn" class="btn-primary">Chụp và đọc</button>
@@ -305,6 +311,7 @@
 
     const cameraModal = document.getElementById("camera-modal");
     const cameraVideo = document.getElementById("camera-video");
+    const cameraFrame = document.getElementById("camera-frame");
     const cameraCanvas = document.getElementById("camera-canvas");
     const cameraCloseButton = document.getElementById("camera-close-btn");
     const cameraCaptureButton = document.getElementById("camera-capture-btn");
@@ -323,6 +330,7 @@
       let output = normalizeDigits(text);
       output = output.replace(/[|｜]/g, "1");
       output = output.replace(/(?<=\d)[Oo](?=\d)/g, "0");
+      output = output.replace(/ー/g, "-");
       output = output.replace(/[•·･]/g, " ");
       output = output.replace(/[^\S\r\n]+/g, " ");
       return output;
@@ -352,6 +360,53 @@
         }
       }
       return "";
+    }
+
+    function cloneCanvas(canvas) {
+      const cloned = document.createElement("canvas");
+      cloned.width = canvas.width;
+      cloned.height = canvas.height;
+      const ctx = cloned.getContext("2d");
+      ctx.drawImage(canvas, 0, 0);
+      return cloned;
+    }
+
+    async function sourceToCanvas(source) {
+      if (source instanceof HTMLCanvasElement) {
+        return cloneCanvas(source);
+      }
+
+      const canvas = document.createElement("canvas");
+      const ctx = canvas.getContext("2d");
+      let imageBitmap = null;
+      try {
+        imageBitmap = await createImageBitmap(source);
+        canvas.width = imageBitmap.width;
+        canvas.height = imageBitmap.height;
+        ctx.drawImage(imageBitmap, 0, 0);
+        return canvas;
+      } finally {
+        if (imageBitmap && imageBitmap.close) {
+          imageBitmap.close();
+        }
+      }
+    }
+
+    function cropCanvasByRatio(canvas, xRatio, yRatio, wRatio, hRatio) {
+      const sx = Math.floor(canvas.width * xRatio);
+      const sy = Math.floor(canvas.height * yRatio);
+      const sw = Math.floor(canvas.width * wRatio);
+      const sh = Math.floor(canvas.height * hRatio);
+
+      const safeW = Math.max(1, Math.min(sw, canvas.width - sx));
+      const safeH = Math.max(1, Math.min(sh, canvas.height - sy));
+
+      const cropped = document.createElement("canvas");
+      cropped.width = safeW;
+      cropped.height = safeH;
+      const ctx = cropped.getContext("2d");
+      ctx.drawImage(canvas, sx, sy, safeW, safeH, 0, 0, safeW, safeH);
+      return cropped;
     }
 
     function renumberRows(container) {
@@ -438,7 +493,7 @@
       if (!spec) return [];
       const normalized = normalizeOcrText(text)
         .replace(/第\s*\d+\s*回/g, " ")
-        .replace(/\d+\s*組/g, " ");
+        .replace(/\d+\s*[組粗姐]/g, " ");
       const lines = normalized.split(/\r?\n/);
       const tickets = [];
 
@@ -461,6 +516,7 @@
       }
 
       for (const line of lines) {
+        if (/年|月|日/.test(line)) continue;
         const nums = (line.match(/\d+/g) || [])
           .map((n) => Number(n))
           .filter((n) => n >= spec.min_number && n <= spec.max_number);
@@ -498,18 +554,18 @@
       }
 
       for (const line of lines) {
-        const groupMatch = line.match(/(\d{1,3})\s*組/);
+        const groupMatch = line.match(/(\d{1,3})\s*[組粗姐]/);
         if (groupMatch) {
           groupHints.push(groupMatch[1]);
         }
 
-        const pairRegex = /(\d{1,3})\s*組[^\d]*(\d{4,7})/g;
+        const pairRegex = /(\d{1,3})\s*[組粗姐][^\d]*(\d{5,7})/g;
         for (const pair of line.matchAll(pairRegex)) {
           addTicket(pair[1], pair[2]);
         }
 
         if (!groupMatch) {
-          const reversePairRegex = /(\d{4,7})[^\d]*(\d{1,3})\s*組/g;
+          const reversePairRegex = /(\d{5,7})[^\d]*(\d{1,3})\s*[組粗姐]/g;
           for (const pair of line.matchAll(reversePairRegex)) {
             addTicket(pair[2], pair[1]);
           }
@@ -548,56 +604,125 @@
       return deduped;
     }
 
-    function enhanceCanvasForOcr(canvas) {
-      const ctx = canvas.getContext("2d", { willReadFrequently: true });
-      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    function enhanceCanvasForOcr(canvas, options = {}) {
+      const { thresholdScale = 0.95, contrast = 1.0, brightness = 0 } = options;
+      const output = cloneCanvas(canvas);
+      const ctx = output.getContext("2d", { willReadFrequently: true });
+      const imageData = ctx.getImageData(0, 0, output.width, output.height);
       const data = imageData.data;
       let sum = 0;
+
       for (let i = 0; i < data.length; i += 4) {
         const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
         sum += gray;
       }
       const avg = sum / (data.length / 4);
-      const threshold = Math.max(95, Math.min(205, avg * 0.95));
+      const threshold = Math.max(85, Math.min(220, avg * thresholdScale));
 
       for (let i = 0; i < data.length; i += 4) {
-        const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+        let gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+        gray = (gray - 128) * contrast + 128 + brightness;
         const value = gray > threshold ? 255 : 0;
         data[i] = value;
         data[i + 1] = value;
         data[i + 2] = value;
       }
       ctx.putImageData(imageData, 0, 0);
-      return canvas;
+      return output;
     }
 
-    function applyOcrText(text) {
-      const drawNo = extractDrawNumberFromText(text);
-      if (drawNo) {
-        drawNumberInput.value = drawNo;
+    function buildOcrCandidates(baseCanvas) {
+      const candidates = [];
+      const centerCrop = cropCanvasByRatio(baseCanvas, 0.05, 0.2, 0.9, 0.6);
+
+      candidates.push({
+        label: "raw",
+        canvas: baseCanvas,
+        psm: "6",
+      });
+      candidates.push({
+        label: "center-binary",
+        canvas: enhanceCanvasForOcr(centerCrop, { thresholdScale: 0.94, contrast: 1.35 }),
+        psm: "6",
+      });
+      candidates.push({
+        label: "center-strong",
+        canvas: enhanceCanvasForOcr(centerCrop, { thresholdScale: 0.9, contrast: 1.55 }),
+        psm: "6",
+      });
+      candidates.push({
+        label: "full-binary",
+        canvas: enhanceCanvasForOcr(baseCanvas, { thresholdScale: 0.95, contrast: 1.25 }),
+        psm: "11",
+      });
+
+      return candidates;
+    }
+
+    function scoreParsedResult(parsed, isNumberMode, normalizedText) {
+      let score = 0;
+      if (parsed.drawNo) score += 5;
+      if (/第\s*\d+\s*回/.test(normalizedText)) score += 3;
+      if (/\d+\s*[組粗姐]/.test(normalizedText)) score += 3;
+
+      if (isNumberMode) {
+        score += parsed.numberTickets.length * 14;
+        if (parsed.numberTickets.some((ticket) => ticket.split(/\s+/).length >= 6)) {
+          score += 4;
+        }
+      } else {
+        score += parsed.traditionalTickets.length * 14;
+        if (parsed.traditionalTickets.some((ticket) => ticket.number.length === 6)) {
+          score += 4;
+        }
+      }
+      return score;
+    }
+
+    function parseOcrTextByMode(text, isNumberMode) {
+      const normalizedText = normalizeOcrText(text);
+      const drawNo = extractDrawNumberFromText(normalizedText);
+      const numberTickets = parseNumberTicketsFromText(normalizedText);
+      const traditionalTickets = parseTraditionalTicketsFromText(normalizedText);
+      const score = scoreParsedResult(
+        { drawNo, numberTickets, traditionalTickets },
+        isNumberMode,
+        normalizedText
+      );
+
+      return {
+        text: normalizedText,
+        drawNo,
+        numberTickets,
+        traditionalTickets,
+        score,
+      };
+    }
+
+    function applyParsedOcr(parsed) {
+      if (parsed.drawNo) {
+        drawNumberInput.value = parsed.drawNo;
       }
 
       const isNumberMode = Boolean(numberSpecs[gameSelect.value]);
       if (isNumberMode) {
-        const parsed = parseNumberTicketsFromText(text);
-        if (!parsed.length) {
+        if (!parsed.numberTickets.length) {
           scanStatus.textContent = "Không nhận diện được vé hợp lệ từ ảnh.";
           return;
         }
-        clearAndFillNumberTickets(parsed);
+        clearAndFillNumberTickets(parsed.numberTickets);
         setMode();
-        scanStatus.textContent = `Đã nhận diện ${parsed.length} vé Loto${drawNo ? ` • Kỳ ${drawNo}` : ""}.`;
+        scanStatus.textContent = `Đã nhận diện ${parsed.numberTickets.length} vé Loto${parsed.drawNo ? ` • Kỳ ${parsed.drawNo}` : ""}.`;
         return;
       }
 
-      const parsed = parseTraditionalTicketsFromText(text);
-      if (!parsed.length) {
+      if (!parsed.traditionalTickets.length) {
         scanStatus.textContent = "Không nhận diện được tổ/số vé từ ảnh.";
         return;
       }
-      clearAndFillTraditionalTickets(parsed);
+      clearAndFillTraditionalTickets(parsed.traditionalTickets);
       setMode();
-      scanStatus.textContent = `Đã nhận diện ${parsed.length} vé truyền thống${drawNo ? ` • Kỳ ${drawNo}` : ""}.`;
+      scanStatus.textContent = `Đã nhận diện ${parsed.traditionalTickets.length} vé truyền thống${parsed.drawNo ? ` • Kỳ ${parsed.drawNo}` : ""}.`;
     }
 
     async function runOcr(source) {
@@ -605,12 +730,41 @@
         scanStatus.textContent = "Không tải được OCR engine.";
         return;
       }
-      scanStatus.textContent = "Đang nhận dạng chữ từ ảnh...";
+
+      const isNumberMode = Boolean(numberSpecs[gameSelect.value]);
+      scanStatus.textContent = "Đang xử lý ảnh quét...";
+
       try {
-        const result = await Tesseract.recognize(source, "eng+jpn", {
-          tessedit_pageseg_mode: "6",
-        });
-        applyOcrText(result.data.text || "");
+        const baseCanvas = await sourceToCanvas(source);
+        const candidates = buildOcrCandidates(baseCanvas);
+        let best = null;
+
+        for (let i = 0; i < candidates.length; i += 1) {
+          const candidate = candidates[i];
+          scanStatus.textContent = `Đang OCR (${i + 1}/${candidates.length})...`;
+
+          const result = await Tesseract.recognize(candidate.canvas, "eng+jpn", {
+            tessedit_pageseg_mode: candidate.psm,
+            preserve_interword_spaces: "1",
+          });
+          const parsed = parseOcrTextByMode(result.data.text || "", isNumberMode);
+          if (!best || parsed.score > best.score) {
+            best = { ...parsed, label: candidate.label };
+          }
+
+          const enoughConfidence = isNumberMode
+            ? parsed.numberTickets.length >= 1 && (parsed.drawNo || parsed.score >= 16)
+            : parsed.traditionalTickets.length >= 1 && (parsed.drawNo || parsed.score >= 16);
+          if (enoughConfidence) {
+            break;
+          }
+        }
+
+        if (!best) {
+          scanStatus.textContent = "OCR thất bại. Vui lòng thử lại ảnh rõ hơn.";
+          return;
+        }
+        applyParsedOcr(best);
       } catch (error) {
         scanStatus.textContent = "OCR thất bại. Vui lòng thử lại ảnh rõ hơn.";
       }
@@ -742,21 +896,57 @@
       cameraVideo.srcObject = null;
     }
 
+    function captureCameraRoiToCanvas() {
+      const videoWidth = cameraVideo.videoWidth;
+      const videoHeight = cameraVideo.videoHeight;
+      if (!videoWidth || !videoHeight) {
+        return null;
+      }
+
+      const videoRect = cameraVideo.getBoundingClientRect();
+      const frameRect = cameraFrame.getBoundingClientRect();
+
+      const scaleX = videoWidth / videoRect.width;
+      const scaleY = videoHeight / videoRect.height;
+
+      let sx = Math.round((frameRect.left - videoRect.left) * scaleX);
+      let sy = Math.round((frameRect.top - videoRect.top) * scaleY);
+      let sw = Math.round(frameRect.width * scaleX);
+      let sh = Math.round(frameRect.height * scaleY);
+
+      if (!Number.isFinite(sx) || !Number.isFinite(sy) || !Number.isFinite(sw) || !Number.isFinite(sh)) {
+        sx = 0;
+        sy = 0;
+        sw = videoWidth;
+        sh = videoHeight;
+      }
+
+      sx = Math.max(0, Math.min(sx, videoWidth - 1));
+      sy = Math.max(0, Math.min(sy, videoHeight - 1));
+      sw = Math.max(1, Math.min(sw, videoWidth - sx));
+      sh = Math.max(1, Math.min(sh, videoHeight - sy));
+
+      const upscale = 2.0;
+      const targetW = Math.max(1200, Math.floor(sw * upscale));
+      const targetH = Math.max(500, Math.floor(sh * upscale));
+
+      const ctx = cameraCanvas.getContext("2d");
+      cameraCanvas.width = targetW;
+      cameraCanvas.height = targetH;
+      ctx.imageSmoothingEnabled = true;
+      ctx.drawImage(cameraVideo, sx, sy, sw, sh, 0, 0, targetW, targetH);
+      return cameraCanvas;
+    }
+
     scanCameraButton.addEventListener("click", openCamera);
     cameraCloseButton.addEventListener("click", closeCamera);
     cameraModal.querySelector(".camera-backdrop").addEventListener("click", closeCamera);
 
     cameraCaptureButton.addEventListener("click", async () => {
-      if (!cameraVideo.videoWidth || !cameraVideo.videoHeight) return;
-      const ctx = cameraCanvas.getContext("2d");
-      const scale = 1.6;
-      cameraCanvas.width = Math.floor(cameraVideo.videoWidth * scale);
-      cameraCanvas.height = Math.floor(cameraVideo.videoHeight * scale);
-      ctx.imageSmoothingEnabled = true;
-      ctx.drawImage(cameraVideo, 0, 0, cameraCanvas.width, cameraCanvas.height);
-      enhanceCanvasForOcr(cameraCanvas);
+      const roiCanvas = captureCameraRoiToCanvas();
+      if (!roiCanvas) return;
       closeCamera();
-      await runOcr(cameraCanvas);
+      await runOcr(roiCanvas);
     });
 
     const clearHistory = () => {

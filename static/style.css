@@ -392,6 +392,70 @@ th {
   max-height: 58vh;
 }
 
+.camera-stage {
+  position: relative;
+}
+
+.camera-frame {
+  position: absolute;
+  left: 7%;
+  top: 24%;
+  width: 86%;
+  height: 46%;
+  border: 2px solid #7ac4ff;
+  border-radius: 14px;
+  box-shadow:
+    0 0 0 9999px rgba(7, 22, 43, 0.36),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.45);
+  pointer-events: none;
+}
+
+.camera-frame::before,
+.camera-frame::after {
+  content: "";
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  border: 3px solid #ffd56e;
+}
+
+.camera-frame::before {
+  left: -2px;
+  top: -2px;
+  border-right: 0;
+  border-bottom: 0;
+  border-radius: 10px 0 0 0;
+}
+
+.camera-frame::after {
+  right: -2px;
+  bottom: -2px;
+  border-left: 0;
+  border-top: 0;
+  border-radius: 0 0 10px 0;
+}
+
+.frame-tag {
+  position: absolute;
+  left: 10px;
+  top: -12px;
+  background: #0e73dd;
+  color: #fff;
+  font-size: 0.76rem;
+  font-weight: 700;
+  padding: 0.12rem 0.42rem;
+  border-radius: 999px;
+}
+
+.frame-note {
+  position: absolute;
+  left: 10px;
+  bottom: -30px;
+  color: #e8f3ff;
+  font-size: 0.82rem;
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.45);
+}
+
 .camera-actions {
   margin-top: 0.6rem;
   display: flex;
@@ -595,6 +659,17 @@ th {
     border-radius: 18px;
   }
 
+  .camera-frame {
+    left: 5%;
+    width: 90%;
+    height: 50%;
+    top: 22%;
+  }
+
+  .frame-note {
+    bottom: -42px;
+  }
+
   .win-headline {
     align-items: flex-start;
   }
@@ -651,8 +726,70 @@ th {
   display: block;
 }
 
+.admin-table-toolbar {
+  display: grid;
+  gap: 0.55rem;
+  grid-template-columns: minmax(210px, 2fr) repeat(4, minmax(120px, 1fr));
+  align-items: end;
+  margin-bottom: 0.7rem;
+}
+
+.admin-table-toolbar label {
+  margin: 0;
+}
+
+.sort-btn {
+  width: 100%;
+  border: 0;
+  padding: 0.08rem 0;
+  font: inherit;
+  text-align: left;
+  background: transparent;
+  color: #21384f;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.sort-btn::after {
+  content: "";
+  margin-left: 0.35rem;
+}
+
+.sort-btn[data-direction="asc"]::after {
+  content: "▲";
+  color: #0b6d53;
+  font-size: 0.7rem;
+}
+
+.sort-btn[data-direction="desc"]::after {
+  content: "▼";
+  color: #0b6d53;
+  font-size: 0.7rem;
+}
+
+.admin-pagination {
+  margin-top: 0.7rem;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.45rem;
+}
+
+.admin-pagination .btn-secondary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 @media (max-width: 980px) {
   .chart-grid {
     grid-template-columns: 1fr;
+  }
+
+  .admin-table-toolbar {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .admin-pagination {
+    justify-content: space-between;
   }
 }

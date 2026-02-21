@@ -58,6 +58,17 @@ pytest
 - Dữ liệu lấy trực tiếp từ CSV public của Mizuho, định dạng có thể thay đổi theo thời gian.
 - Logic dò vé truyền thống đã hỗ trợ các điều kiện phổ biến: khớp tổ/số, khớp đuôi, giải trước-sau, giải khác tổ cùng số.
 
+## Rate limit
+
+Ứng dụng có chặn tần suất request theo IP (in-memory):
+
+- `RATE_LIMIT_ENABLED` (mặc định: `true`)
+- `RATE_LIMIT_WINDOW_SECONDS` (mặc định: `60`)
+- `RATE_LIMIT_MAX_REQUESTS_PER_WINDOW` (mặc định: `120`)
+- `RATE_LIMIT_POST_ROOT_MAX_REQUESTS_PER_WINDOW` (mặc định: `20`)
+
+Khi vượt ngưỡng, server trả về HTTP `429` và header `Retry-After`.
+
 ## Deploy AWS
 
 - Simple AWS deploy guide and scripts: `deploy/aws/README.md`

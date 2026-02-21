@@ -75,34 +75,59 @@
 
     <section class="panel">
       <h3>Recent Requests</h3>
+      <div class="admin-table-toolbar">
+        <label>
+          Search
+          <input id="recent-search-input" type="search" placeholder="Path, method, status, IP...">
+        </label>
+        <label>
+          Method
+          <select id="recent-method-filter">
+            <option value="">All</option>
+          </select>
+        </label>
+        <label>
+          Status
+          <select id="recent-status-filter">
+            <option value="">All</option>
+          </select>
+        </label>
+        <label>
+          IP
+          <input id="recent-ip-filter" type="search" placeholder="e.g. 133.200">
+        </label>
+        <label>
+          Rows / page
+          <select id="recent-page-size">
+            <option value="10">10</option>
+            <option value="20" selected>20</option>
+            <option value="50">50</option>
+            <option value="100">100</option>
+          </select>
+        </label>
+      </div>
       <table>
         <thead>
           <tr>
-            <th>Time (UTC)</th>
-            <th>Method</th>
-            <th>Path</th>
-            <th>Status</th>
-            <th>IP</th>
-            <th>Duration</th>
+            <th><button type="button" class="sort-btn" data-sort-key="timestamp">Time (Local)</button></th>
+            <th><button type="button" class="sort-btn" data-sort-key="method">Method</button></th>
+            <th><button type="button" class="sort-btn" data-sort-key="path">Path</button></th>
+            <th><button type="button" class="sort-btn" data-sort-key="status_code">Status</button></th>
+            <th><button type="button" class="sort-btn" data-sort-key="ip">IP</button></th>
+            <th><button type="button" class="sort-btn" data-sort-key="duration_ms">Duration</button></th>
           </tr>
         </thead>
-        <tbody>
-          {% for row in traffic.recent_requests %}
-            <tr>
-              <td>{{ row.timestamp }}</td>
-              <td>{{ row.method }}</td>
-              <td>{{ row.path }}</td>
-              <td>{{ row.status_code }}</td>
-              <td>{{ row.ip }}</td>
-              <td>{{ row.duration_ms }} ms</td>
-            </tr>
-          {% else %}
-            <tr>
-              <td colspan="6">No request records yet.</td>
-            </tr>
-          {% endfor %}
+        <tbody id="recent-requests-body">
+          <tr>
+            <td colspan="6">Loading...</td>
+          </tr>
         </tbody>
       </table>
+      <div class="admin-pagination" id="recent-pagination">
+        <button type="button" class="btn-secondary" id="recent-prev-page">Previous</button>
+        <p class="meta" id="recent-page-info">Page 1 / 1</p>
+        <button type="button" class="btn-secondary" id="recent-next-page">Next</button>
+      </div>
     </section>
 
     <section class="panel">
@@ -120,7 +145,7 @@
       <table>
         <thead>
           <tr>
-            <th>Time (UTC)</th>
+            <th>Time (Local)</th>
             <th>Mode</th>
             <th>Game</th>
             <th>Draw</th>
@@ -133,7 +158,7 @@
         <tbody>
           {% for item in recent_searches %}
             <tr>
-              <td>{{ item.created_at_iso }}</td>
+              <td class="js-local-time" data-utc="{{ item.created_at_iso }}">{{ item.created_at_iso }}</td>
               <td>{{ item.mode }}</td>
               <td>{{ item.game }}</td>
               <td>{{ item.draw_number }}</td>
@@ -157,6 +182,7 @@
     const minuteSeries = {{ traffic.minute_series | tojson }};
     const statusCounts = {{ traffic.status_counts | tojson }};
     const topPaths = {{ traffic.top_paths | tojson }};
+    const recentRequests = {{ traffic.recent_requests | tojson }};
     const chartRegistry = (window.__lotteryAdminCharts = window.__lotteryAdminCharts || {});
 
     function resetChart(name) {
@@ -259,9 +285,235 @@
       });
     }
 
+    function toLocalDateTime(value) {
+      if (!value) return "-";
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return value;
+      return date.toLocaleString(undefined, {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+      });
+    }
+
+    function convertStaticUtcCellsToLocal() {
+      document.querySelectorAll(".js-local-time").forEach((cell) => {
+        const utcValue = cell.dataset.utc || cell.textContent || "";
+        cell.textContent = toLocalDateTime(utcValue.trim());
+      });
+    }
+
+    function initRecentRequestsTable() {
+      const body = document.getElementById("recent-requests-body");
+      const searchInput = document.getElementById("recent-search-input");
+      const methodFilter = document.getElementById("recent-method-filter");
+      const statusFilter = document.getElementById("recent-status-filter");
+      const ipFilter = document.getElementById("recent-ip-filter");
+      const pageSizeSelect = document.getElementById("recent-page-size");
+      const prevBtn = document.getElementById("recent-prev-page");
+      const nextBtn = document.getElementById("recent-next-page");
+      const pageInfo = document.getElementById("recent-page-info");
+      const sortButtons = Array.from(document.querySelectorAll(".sort-btn"));
+      if (!body) return;
+
+      const state = {
+        searchTerm: "",
+        method: "",
+        status: "",
+        ip: "",
+        pageSize: Number(pageSizeSelect ? pageSizeSelect.value : 20),
+        page: 1,
+        sortKey: "timestamp",
+        sortDirection: "desc",
+      };
+
+      const methods = new Set();
+      const statuses = new Set();
+      for (const row of recentRequests) {
+        if (row && row.method) methods.add(String(row.method).toUpperCase());
+        if (row && row.status_code !== undefined && row.status_code !== null) statuses.add(String(row.status_code));
+      }
+      if (methodFilter) {
+        Array.from(methods).sort().forEach((method) => {
+          const option = document.createElement("option");
+          option.value = method;
+          option.textContent = method;
+          methodFilter.appendChild(option);
+        });
+      }
+      if (statusFilter) {
+        Array.from(statuses).sort((a, b) => Number(a) - Number(b)).forEach((status) => {
+          const option = document.createElement("option");
+          option.value = status;
+          option.textContent = status;
+          statusFilter.appendChild(option);
+        });
+      }
+
+      function updateSortIndicators() {
+        sortButtons.forEach((btn) => {
+          const key = btn.dataset.sortKey || "";
+          if (key === state.sortKey) {
+            btn.dataset.direction = state.sortDirection;
+          } else {
+            btn.dataset.direction = "";
+          }
+        });
+      }
+
+      function getComparableValue(row, key) {
+        if (key === "timestamp") {
+          const date = new Date(row.timestamp || "");
+          return Number.isNaN(date.getTime()) ? 0 : date.getTime();
+        }
+        if (key === "duration_ms" || key === "status_code") {
+          return Number(row[key] || 0);
+        }
+        return String(row[key] || "").toLowerCase();
+      }
+
+      function applyFilters() {
+        const search = state.searchTerm.trim().toLowerCase();
+        return recentRequests.filter((row) => {
+          const method = String(row.method || "").toUpperCase();
+          const status = String(row.status_code ?? "");
+          const ip = String(row.ip || "");
+          const path = String(row.path || "");
+          if (state.method && method !== state.method) return false;
+          if (state.status && status !== state.status) return false;
+          if (state.ip && !ip.toLowerCase().includes(state.ip)) return false;
+          if (!search) return true;
+          const haystack = [row.timestamp, method, path, status, ip, row.duration_ms].join(" ").toLowerCase();
+          return haystack.includes(search);
+        });
+      }
+
+      function renderRows() {
+        const filtered = applyFilters();
+        filtered.sort((a, b) => {
+          const av = getComparableValue(a, state.sortKey);
+          const bv = getComparableValue(b, state.sortKey);
+          if (av < bv) return state.sortDirection === "asc" ? -1 : 1;
+          if (av > bv) return state.sortDirection === "asc" ? 1 : -1;
+          return 0;
+        });
+
+        const totalPages = Math.max(1, Math.ceil(filtered.length / Math.max(1, state.pageSize)));
+        if (state.page > totalPages) state.page = totalPages;
+        const start = (state.page - 1) * state.pageSize;
+        const pageRows = filtered.slice(start, start + state.pageSize);
+
+        body.textContent = "";
+        if (!pageRows.length) {
+          const tr = document.createElement("tr");
+          const td = document.createElement("td");
+          td.colSpan = 6;
+          td.textContent = "No request records found.";
+          tr.appendChild(td);
+          body.appendChild(tr);
+        } else {
+          for (const row of pageRows) {
+            const tr = document.createElement("tr");
+            const cells = [
+              toLocalDateTime(row.timestamp),
+              String(row.method || ""),
+              String(row.path || ""),
+              String(row.status_code ?? ""),
+              String(row.ip || ""),
+              `${Number(row.duration_ms || 0)} ms`,
+            ];
+            for (const cellValue of cells) {
+              const td = document.createElement("td");
+              td.textContent = cellValue;
+              tr.appendChild(td);
+            }
+            body.appendChild(tr);
+          }
+        }
+
+        if (pageInfo) {
+          pageInfo.textContent = `Page ${state.page} / ${totalPages} | Total ${filtered.length}`;
+        }
+        if (prevBtn) prevBtn.disabled = state.page <= 1;
+        if (nextBtn) nextBtn.disabled = state.page >= totalPages;
+        updateSortIndicators();
+      }
+
+      if (searchInput) {
+        searchInput.addEventListener("input", () => {
+          state.searchTerm = searchInput.value || "";
+          state.page = 1;
+          renderRows();
+        });
+      }
+      if (methodFilter) {
+        methodFilter.addEventListener("change", () => {
+          state.method = methodFilter.value || "";
+          state.page = 1;
+          renderRows();
+        });
+      }
+      if (statusFilter) {
+        statusFilter.addEventListener("change", () => {
+          state.status = statusFilter.value || "";
+          state.page = 1;
+          renderRows();
+        });
+      }
+      if (ipFilter) {
+        ipFilter.addEventListener("input", () => {
+          state.ip = (ipFilter.value || "").trim().toLowerCase();
+          state.page = 1;
+          renderRows();
+        });
+      }
+      if (pageSizeSelect) {
+        pageSizeSelect.addEventListener("change", () => {
+          const nextSize = Number(pageSizeSelect.value || 20);
+          state.pageSize = Number.isFinite(nextSize) && nextSize > 0 ? nextSize : 20;
+          state.page = 1;
+          renderRows();
+        });
+      }
+      if (prevBtn) {
+        prevBtn.addEventListener("click", () => {
+          state.page = Math.max(1, state.page - 1);
+          renderRows();
+        });
+      }
+      if (nextBtn) {
+        nextBtn.addEventListener("click", () => {
+          state.page += 1;
+          renderRows();
+        });
+      }
+      sortButtons.forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const key = btn.dataset.sortKey || "";
+          if (!key) return;
+          if (state.sortKey === key) {
+            state.sortDirection = state.sortDirection === "asc" ? "desc" : "asc";
+          } else {
+            state.sortKey = key;
+            state.sortDirection = key === "timestamp" ? "desc" : "asc";
+          }
+          state.page = 1;
+          renderRows();
+        });
+      });
+
+      renderRows();
+    }
+
     buildTrafficLineChart();
     buildStatusDonutChart();
     buildPathBarChart();
+    convertStaticUtcCellsToLocal();
+    initRecentRequestsTable();
   </script>
 </body>
 </html>

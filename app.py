@@ -13,6 +13,7 @@ except Exception:  # pragma: no cover - optional dependency fallback
 from flask import Flask, Response, render_template, request
 
 from lottery_checker.analytics import TrafficTracker, create_search_store_from_env
+from lottery_checker.rate_limit import InMemoryRateLimiter
 
 from lottery_checker import (
     LotteryDataError,
@@ -35,6 +36,30 @@ app = Flask(__name__)
 client = MizuhoLotteryClient(timeout_seconds=15)
 traffic_tracker = TrafficTracker(max_recent=500)
 search_store = create_search_store_from_env()
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw_value = os.environ.get(name, "").strip().lower()
+    if not raw_value:
+        return default
+    return raw_value in {"1", "true", "yes", "on"}
+
+
+def _env_int(name: str, default: int, minimum: int = 1) -> int:
+    raw_value = os.environ.get(name, "").strip()
+    try:
+        parsed = int(raw_value) if raw_value else default
+    except ValueError:
+        parsed = default
+    return max(minimum, parsed)
+
+
+rate_limit_enabled = _env_bool("RATE_LIMIT_ENABLED", True)
+rate_limiter = InMemoryRateLimiter(
+    window_seconds=_env_int("RATE_LIMIT_WINDOW_SECONDS", 60),
+    max_requests_per_window=_env_int("RATE_LIMIT_MAX_REQUESTS_PER_WINDOW", 120),
+    max_post_root_requests_per_window=_env_int("RATE_LIMIT_POST_ROOT_MAX_REQUESTS_PER_WINDOW", 20),
+)
 
 
 def _client_ip() -> str:
@@ -245,6 +270,28 @@ def _build_history_entry(
 @app.before_request
 def _track_request_start() -> None:
     request.environ["lottery_checker.request_start"] = perf_counter()
+
+
+@app.before_request
+def _apply_rate_limit() -> Response | None:
+    if not rate_limit_enabled:
+        return None
+    decision = rate_limiter.allow(
+        ip=_client_ip(),
+        method=request.method,
+        path=request.path,
+    )
+    if decision.allowed:
+        return None
+
+    retry_after = max(1, decision.retry_after_seconds)
+    response = Response(
+        f"Quá nhiều yêu cầu từ IP của bạn. Vui lòng thử lại sau {retry_after} giây.",
+        status=429,
+        mimetype="text/plain",
+    )
+    response.headers["Retry-After"] = str(retry_after)
+    return response
 
 
 @app.after_request
