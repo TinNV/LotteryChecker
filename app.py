@@ -14,6 +14,7 @@ from flask import Flask, Response, render_template, request
 
 from lottery_checker.analytics import TrafficTracker, create_search_store_from_env
 from lottery_checker.rate_limit import InMemoryRateLimiter
+from lottery_checker.scan_guard import InMemoryScanGuard
 
 from lottery_checker import (
     LotteryDataError,
@@ -52,6 +53,24 @@ def _env_int(name: str, default: int, minimum: int = 1) -> int:
     except ValueError:
         parsed = default
     return max(minimum, parsed)
+
+
+def _env_csv(name: str) -> List[str]:
+    raw_value = os.environ.get(name, "").strip()
+    if not raw_value:
+        return []
+    return [item.strip() for item in raw_value.split(",") if item.strip()]
+
+
+scan_guard_enabled = _env_bool("SCAN_GUARD_ENABLED", True)
+scan_guard = InMemoryScanGuard(
+    window_seconds=_env_int("SCAN_GUARD_WINDOW_SECONDS", 300),
+    max_suspicious_hits=_env_int("SCAN_GUARD_MAX_SUSPICIOUS_HITS", 8),
+    ban_seconds=_env_int("SCAN_GUARD_BAN_SECONDS", 900),
+    blocked_exact_paths=_env_csv("SCAN_GUARD_BLOCKED_EXACT_PATHS") or None,
+    blocked_prefixes=_env_csv("SCAN_GUARD_BLOCKED_PREFIXES") or None,
+    blocked_substrings=_env_csv("SCAN_GUARD_BLOCKED_SUBSTRINGS") or None,
+)
 
 
 rate_limit_enabled = _env_bool("RATE_LIMIT_ENABLED", True)
@@ -270,6 +289,19 @@ def _build_history_entry(
 @app.before_request
 def _track_request_start() -> None:
     request.environ["lottery_checker.request_start"] = perf_counter()
+
+
+@app.before_request
+def _apply_scan_guard() -> Response | None:
+    if not scan_guard_enabled:
+        return None
+    decision = scan_guard.inspect(ip=_client_ip(), path=request.path)
+    if decision.allowed:
+        return None
+    response = Response("Not Found", status=404, mimetype="text/plain")
+    if decision.retry_after_seconds > 0:
+        response.headers["Retry-After"] = str(decision.retry_after_seconds)
+    return response
 
 
 @app.before_request

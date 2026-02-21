@@ -22,6 +22,7 @@ Open inbound ports:
 
 ```bash
 ssh -i <your-key>.pem ec2-user@<SERVER_PUBLIC_IP>
+ssh -i deploy\ec2\CertMindMapApp-Key-unix.pem ec2-user@ec2-13-230-53-99.ap-northeast-1.compute.amazonaws.com
 ```
 
 For Ubuntu AMI use `ubuntu` instead of `ec2-user`.
@@ -399,3 +400,46 @@ docker compose -f deploy/ec2/docker-compose.yml --env-file .env restart app
 ```
 
 If STS fails inside container with credential errors, attach an EC2 instance role and ensure IMDSv2 hop limit is at least `2` for Dockerized workloads.
+
+## 11. Low-cost anti URL-scan protection
+
+This app includes an in-memory scan guard to block common probe URLs
+(`/.env`, `/.git`, `/wp-login.php`, `/phpmyadmin`, path traversal, etc.)
+without paid services.
+
+Set these in `.env`:
+
+```bash
+# Scan guard
+SCAN_GUARD_ENABLED=true
+SCAN_GUARD_WINDOW_SECONDS=300
+SCAN_GUARD_MAX_SUSPICIOUS_HITS=8
+SCAN_GUARD_BAN_SECONDS=900
+
+# Keep rate-limit on
+RATE_LIMIT_ENABLED=true
+RATE_LIMIT_WINDOW_SECONDS=60
+RATE_LIMIT_MAX_REQUESTS_PER_WINDOW=120
+```
+
+Optional custom patterns:
+
+```bash
+# comma-separated
+SCAN_GUARD_BLOCKED_EXACT_PATHS=/.env,/wp-login.php,/xmlrpc.php
+SCAN_GUARD_BLOCKED_PREFIXES=/.git/,/wp-admin,/phpmyadmin/
+SCAN_GUARD_BLOCKED_SUBSTRINGS=../,..\\,etc/passwd
+```
+
+Apply new settings:
+
+```bash
+cd ~/lottery-checker
+bash deploy/ec2/update.sh
+```
+
+Optional free edge layer: use Cloudflare free plan (if you have a domain) to add extra bot/rate rules before traffic reaches EC2.
+
+powershell -ExecutionPolicy Bypass -File .\deploy\ec2\copy-env-to-ec2.ps1 -HostName ec2-13-230-53-99.ap-northeast-1.compute.amazonaws.com -KeyFile .\deploy\ec2\CertMindMapApp-Key-unix.pem
+
+bash deploy/ec2/update.sh
